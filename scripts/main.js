@@ -24,8 +24,35 @@ let apiKeys = {
   abuseipdb: "",
 };
 
+// Detect if running locally (via node server.js) vs GitHub Pages
+const isLocalhost =
+  window.location.hostname === "localhost" ||
+  window.location.hostname === "127.0.0.1";
+
 // Store attachment contents for hash lookups (keyed by attachment filename)
 const attachmentContentMap = new Map();
+
+// Build API endpoint - uses local proxy when running locally, direct API on GitHub Pages
+function getVTEndpoint(path) {
+  if (isLocalhost) {
+    return "http://localhost:8080/proxy/vt" + path;
+  }
+  return "https://www.virustotal.com" + path;
+}
+
+function getVTSubmitEndpoint() {
+  if (isLocalhost) {
+    return "http://localhost:8080/proxy/vt-submit";
+  }
+  return "https://www.virustotal.com/api/v3/urls";
+}
+
+function getAbuseIPDBEndpoint(query) {
+  if (isLocalhost) {
+    return "http://localhost:8080/proxy/abuseipdb" + query;
+  }
+  return "https://api.abuseipdb.com/api/v2" + query;
+}
 
 // Safely get localStorage value
 try {
@@ -453,7 +480,7 @@ async function lookupVirusTotal(btn) {
         resultContent.innerHTML =
           '<span class="lookup-loading">Computing hash...</span>';
         const hash = await sha256(content);
-        endpoint = `https://www.virustotal.com/api/v3/files/${hash}`;
+        endpoint = getVTEndpoint(`/api/v3/files/${hash}`);
       } else {
         // No content available
         resultContent.innerHTML =
@@ -463,15 +490,15 @@ async function lookupVirusTotal(btn) {
       }
     } else if (type === "ip") {
       // IP address lookup
-      endpoint = `https://www.virustotal.com/api/v3/ip_addresses/${encodeURIComponent(value)}`;
+      endpoint = getVTEndpoint(`/api/v3/ip_addresses/${encodeURIComponent(value)}`);
     } else if (type === "domain") {
       // Domain lookup
-      endpoint = `https://www.virustotal.com/api/v3/domains/${encodeURIComponent(value)}`;
+      endpoint = getVTEndpoint(`/api/v3/domains/${encodeURIComponent(value)}`);
     } else {
       // URL lookup (default)
       const urlId = btoa(value).replace(/=/g, "");
-      endpoint = `https://www.virustotal.com/api/v3/urls/${urlId}`;
-      submitEndpoint = "https://www.virustotal.com/api/v3/urls";
+      endpoint = getVTEndpoint(`/api/v3/urls/${urlId}`);
+      submitEndpoint = getVTSubmitEndpoint();
       submitBody = `url=${encodeURIComponent(value)}`;
       submitContentType = "application/x-www-form-urlencoded";
     }
@@ -621,7 +648,7 @@ async function lookupAbuseIPDB(btn) {
 
   try {
     const response = await fetch(
-      `https://api.abuseipdb.com/api/v2/check?ipAddress=${encodeURIComponent(ip)}&maxAgeInDays=90`,
+      getAbuseIPDBEndpoint(`/check?ipAddress=${encodeURIComponent(ip)}&maxAgeInDays=90`),
       {
         method: "GET",
         headers: {
