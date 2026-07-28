@@ -558,7 +558,48 @@ async function lookupVirusTotal(btn) {
       </div>
     `;
   } catch (error) {
-    resultContent.innerHTML = `<span class="lookup-error">Error: ${esc(error.message)}</span>`;
+    // Detect CORS or network errors
+    const isCors =
+      error.message?.includes("CORS") ||
+      error.message?.includes("Failed to fetch") ||
+      error.name === "TypeError";
+
+    if (isCors) {
+      // Build fallback web URL
+      let webUrl = "";
+      if (type === "attachment") {
+        const content = attachmentContentMap.get(value);
+        if (content) {
+          const hash = await sha256(content);
+          webUrl = `https://www.virustotal.com/gui/file/${hash}`;
+        }
+      } else if (type === "ip") {
+        webUrl = `https://www.virustotal.com/gui/ip-address/${encodeURIComponent(value)}`;
+      } else if (type === "domain") {
+        webUrl = `https://www.virustotal.com/gui/domain/${encodeURIComponent(value)}`;
+      } else {
+        webUrl = `https://www.virustotal.com/gui/search/${encodeURIComponent(value)}`;
+      }
+
+      if (webUrl) {
+        resultContent.innerHTML = `
+          <div class="lookup-result">
+            <div class="lookup-header">
+              <strong>VirusTotal</strong>
+              <span class="lookup-reputation lookup-suspicious">CORS BLOCKED</span>
+            </div>
+            <div class="lookup-info">
+              Direct API calls are blocked by your browser's CORS policy.
+              <a href="${webUrl}" target="_blank" rel="noopener" class="btn-lookup" style="display:inline-block;margin-top:8px;">Open in VirusTotal ↗</a>
+            </div>
+          </div>
+        `;
+      } else {
+        resultContent.innerHTML = `<span class="lookup-error">Error: ${esc(error.message)}</span>`;
+      }
+    } else {
+      resultContent.innerHTML = `<span class="lookup-error">Error: ${esc(error.message)}</span>`;
+    }
   } finally {
     btn.disabled = false;
   }
@@ -629,7 +670,28 @@ async function lookupAbuseIPDB(btn) {
       </div>
     `;
   } catch (error) {
-    resultContent.innerHTML = `<span class="lookup-error">Error: ${esc(error.message)}</span>`;
+    const isCors =
+      error.message?.includes("CORS") ||
+      error.message?.includes("Failed to fetch") ||
+      error.name === "TypeError";
+
+    if (isCors) {
+      const webUrl = `https://www.abuseipdb.com/check/${encodeURIComponent(ip)}`;
+      resultContent.innerHTML = `
+        <div class="lookup-result">
+          <div class="lookup-header">
+            <strong>AbuseIPDB</strong>
+            <span class="lookup-reputation lookup-suspicious">CORS BLOCKED</span>
+          </div>
+          <div class="lookup-info">
+            Direct API calls are blocked by your browser's CORS policy.
+            <a href="${webUrl}" target="_blank" rel="noopener" class="btn-lookup" style="display:inline-block;margin-top:8px;">Open in AbuseIPDB ↗</a>
+          </div>
+        </div>
+      `;
+    } else {
+      resultContent.innerHTML = `<span class="lookup-error">Error: ${esc(error.message)}</span>`;
+    }
   } finally {
     btn.disabled = false;
   }
