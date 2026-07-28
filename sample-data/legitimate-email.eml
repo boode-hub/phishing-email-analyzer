@@ -1,0 +1,32 @@
+From: notifications@github.com
+To: user@example.com
+Subject: Security alert for your GitHub account
+Date: Mon, 15 Jan 2024 10:30:00 +0000
+Message-ID: <abc123@github.com>
+Return-Path: <notifications@github.com>
+Reply-To: notifications@github.com
+Authentication-Results: mx.example.com; spf=pass smtp.mailfrom=github.com; dkim=pass header.d=github.com; dmarc=pass header.from=github.com
+Received-SPF: pass (example.com: domain of notifications@github.com designates 192.30.252.0/22 as permitted sender)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=github.com;
+Received: from github.com (github.com [192.30.252.0])
+	by mx.example.com (Postfix) with ESMTPS id ABC123
+	for <user@example.com>; Mon, 15 Jan 2024 10:30:00 +0000
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+
+Hi there,
+
+We noticed a new sign-in to your GitHub account from a device we don't recognize.
+
+Device: Chrome on Windows
+Location: San Francisco, CA, USA
+IP Address: 203.0.113.1
+Time: January 15, 2024 at 10:25 AM UTC
+
+If this was you, you can ignore this email. If you don't recognize this activity, please review your account security settings.
+
+You can view your active sessions and manage your security settings at:
+https://github.com/settings/security
+
+Thanks,
+The GitHub Team

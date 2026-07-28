@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Phishing Email Analyzer</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles/main.css" />
+  </head>
+  <body>
+    <div class="app-container">
+      <!-- Trust Banner -->
+      <div class="trust-banner">
+        <svg
+          width="16"
+          height="16"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+        >
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+        </svg>
+        <span
+          >This tool runs entirely in your browser. Nothing is uploaded or
+          transmitted, except IOCs you explicitly submit to VirusTotal/AbuseIPDB
+          using your own API key (see Settings).</span
+        >
+      </div>
+
+      <!-- Header -->
+      <header class="app-header">
+        <h1>Phishing Email Analyzer</h1>
+        <button id="settings-btn" class="btn btn-secondary" title="Settings">
+          <svg
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <circle cx="12" cy="12" r="3" />
+            <path
+              d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"
+            />
+          </svg>
+        </button>
+      </header>
+
+      <!-- Input Section -->
+      <section id="input-section" class="panel">
+        <h2>Email Input</h2>
+        <div class="input-methods">
+          <div class="input-method">
+            <label for="email-input">Paste email source or headers:</label>
+            <textarea
+              id="email-input"
+              placeholder="Paste raw email headers or full email source here..."
+            ></textarea>
+          </div>
+          <div class="input-method">
+            <label for="file-upload">Or upload file:</label>
+            <input type="file" id="file-upload" accept=".eml,.txt,.msg" />
+            <small class="file-hint"
+              >.eml and .txt supported. .msg support coming soon.</small
+            >
+          </div>
+        </div>
+        <div class="input-actions">
+          <button id="analyze-btn" class="btn btn-primary">
+            Analyze Email
+          </button>
+          <button id="clear-btn" class="btn btn-secondary">Clear</button>
+        </div>
+        <div id="input-status" class="status-message"></div>
+      </section>
+
+      <!-- Focused Summary -->
+      <section id="summary-section" class="panel hidden">
+        <h2>Quick Summary</h2>
+        <div id="summary-content"></div>
+      </section>
+
+      <!-- Verdict Summary -->
+      <section id="verdict-section" class="panel hidden">
+        <h2>Analysis Result</h2>
+        <div id="verdict-content"></div>
+      </section>
+
+      <!-- Authentication Panel -->
+      <section id="auth-section" class="panel hidden">
+        <h2>Email Authentication</h2>
+        <div id="auth-content"></div>
+      </section>
+
+      <!-- IOC Panel -->
+      <section id="ioc-section" class="panel hidden">
+        <h2>Indicators of Compromise (IOCs)</h2>
+        <div id="ioc-content"></div>
+      </section>
+
+      <!-- Body & Language Analysis -->
+      <section id="body-section" class="panel hidden">
+        <h2>Body & Language Analysis</h2>
+        <div id="body-content"></div>
+      </section>
+
+      <!-- Header Details -->
+      <section id="headers-section" class="panel hidden">
+        <h2>Email Headers</h2>
+        <div id="headers-content"></div>
+      </section>
+
+      <!-- Settings Modal -->
+      <div id="settings-modal" class="modal hidden">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h2>Settings</h2>
+            <button id="close-settings" class="btn-close">&times;</button>
+          </div>
+          <div class="modal-body">
+            <p class="settings-note">
+              Your keys are stored only in this browser and are sent only to
+              VirusTotal/AbuseIPDB when you click a lookup button below. Nothing
+              is sent automatically.
+            </p>
+
+            <div class="setting-field">
+              <label for="virustotal-key">VirusTotal API Key:</label>
+              <input
+                type="password"
+                id="virustotal-key"
+                placeholder="Enter your VirusTotal API key"
+              />
+              <small>Used for URL and domain lookups</small>
+            </div>
+
+            <div class="setting-field">
+              <label for="abuseipdb-key">AbuseIPDB API Key:</label>
+              <input
+                type="password"
+                id="abuseipdb-key"
+                placeholder="Enter your AbuseIPDB API key"
+              />
+              <small>Used for IP address lookups</small>
+            </div>
+
+            <div class="setting-actions">
+              <button id="save-settings" class="btn btn-primary">
+                Save Settings
+              </button>
+              <button id="clear-keys" class="btn btn-danger">
+                Clear Saved Keys
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="scripts/main.js"></script>
+  </body>
+</html>

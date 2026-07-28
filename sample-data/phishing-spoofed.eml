@@ -1,0 +1,29 @@
+From: security@paypa1.com
+To: victim@example.com
+Subject: =?UTF-8?B?QWN0aW9uIFJlcXVpcmVkOiBZb3VyIEFjY291bnQgV2lsbCBCZSBTdXNwZW5kZWQ=?=
+Date: Mon, 15 Jan 2024 14:22:00 +0000
+Message-ID: <xyz789@paypa1.com>
+Return-Path: <bounce@malicious-server.ru>
+Reply-To: support@paypa1-security.com
+Authentication-Results: mx.example.com; spf=fail smtp.mailfrom=malicious-server.ru; dkim=none header.d=paypa1.com; dmarc=fail header.from=paypa1.com
+Received-SPF: fail (example.com: domain of bounce@malicious-server.ru does not designate 198.51.100.50 as permitted sender)
+Received: from malicious-server.ru (unknown [198.51.100.50])
+	by mx.example.com (Postfix) with ESMTPS id XYZ789
+	for <victim@example.com>; Mon, 15 Jan 2024 14:22:00 +0000
+Content-Type: text/html; charset="utf-8"
+MIME-Version: 1.0
+
+<html>
+<body>
+<p>Dear Customer,</p>
+
+<p>We have detected unusual activity on your PayPal account. <strong>Your account will be suspended within 24 hours</strong> if you do not verify your information immediately.</p>
+
+<p>Please <a href="http://paypa1-verify.com/login">click here to verify</a> your account and confirm your password to avoid suspension.</p>
+
+<p>Act now to secure your account!</p>
+
+<p>Best regards,<br>
+PayPal Security Team</p>
+</body>
+</html>

@@ -1,0 +1,32 @@
+From: ceo@company-abc.com
+To: finance@company-abc.com
+Subject: URGENT: Wire Transfer Needed Immediately
+Date: Mon, 15 Jan 2024 09:15:00 +0000
+Message-ID: <urgent123@company-abc.com>
+Return-Path: <ceo@company-abc.com>
+Reply-To: ceo@company-abc.com
+Authentication-Results: mx.example.com; spf=pass smtp.mailfrom=company-abc.com; dkim=pass header.d=company-abc.com; dmarc=pass header.from=company-abc.com
+Received-SPF: pass (example.com: domain of ceo@company-abc.com designates 203.0.113.10 as permitted sender)
+Received: from mail.company-abc.com (mail.company-abc.com [203.0.113.10])
+	by mx.example.com (Postfix) with ESMTPS id URGENT123
+	for <finance@company-abc.com>; Mon, 15 Jan 2024 09:15:00 +0000
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+
+Hi,
+
+I'm currently in a meeting with our lawyers and need you to process a wire transfer immediately. This is time sensitive and must be completed within the next 2 hours.
+
+Please transfer $47,500 to the following account:
+
+Bank: First International Bank
+Account: 1234567890
+Routing: 987654321
+SWIFT: FIRBUS33
+
+This is for an urgent acquisition that I cannot discuss right now. Do not delay - process this immediately and send me the confirmation.
+
+I will be unreachable by phone for the next few hours. Just handle it.
+
+Regards,
+CEO
