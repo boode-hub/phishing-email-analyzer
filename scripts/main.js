@@ -476,6 +476,9 @@ async function lookupVirusTotal(btn) {
       submitContentType = "application/x-www-form-urlencoded";
     }
 
+    console.log("[VT] Fetching:", endpoint);
+    console.log("[VT] Key prefix:", apiKeys.virustotal.substring(0, 8) + "...");
+
     const response = await fetch(endpoint, {
       method: "GET",
       headers: {
@@ -483,6 +486,8 @@ async function lookupVirusTotal(btn) {
         Accept: "application/json",
       },
     });
+
+    console.log("[VT] Response status:", response.status);
 
     if (response.status === 404 && submitEndpoint) {
       // URL not analyzed yet - submit for analysis
@@ -496,6 +501,7 @@ async function lookupVirusTotal(btn) {
         },
         body: submitBody,
       });
+      console.log("[VT] Submit response status:", submitResponse.status);
       if (submitResponse.ok) {
         resultContent.innerHTML =
           '<span class="lookup-info">URL submitted to VirusTotal for analysis. Check back in a few minutes.</span>';
