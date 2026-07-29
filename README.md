@@ -94,6 +94,26 @@ node server.js
 - IP reputation check via `/api/v2/check`
 - Shows abuse confidence score, total reports, country, ISP
 
+### CORS Proxy Setup (Required for GitHub Pages)
+
+When running on GitHub Pages, browsers block direct API calls due to CORS restrictions. You have two options:
+
+**Option 1: Run Locally (Recommended)**
+```bash
+node server.js
+# Open http://localhost:8080
+```
+The local server includes a built-in proxy that handles API calls automatically.
+
+**Option 2: Use a Cloudflare Worker (for GitHub Pages)**
+1. Go to [workers.cloudflare.com](https://workers.cloudflare.com/) and create a free account
+2. Create a new Worker and paste the code from [`cors-worker.js`](cors-worker.js)
+3. Save and deploy - copy your worker URL (e.g., `https://your-worker.your-subdomain.workers.dev`)
+4. In the Phishing Analyzer app, open **Settings** and paste the worker URL in the **CORS Proxy URL** field
+5. The worker URL should end with `?url=` (e.g., `https://your-worker.workers.dev?url=`)
+
+**Why a proxy is needed:** VirusTotal and AbuseIPDB APIs don't send `Access-Control-Allow-Origin` headers, so browsers reject responses from GitHub Pages. A CORS proxy adds these headers. The Cloudflare Worker template provided forwards all headers (including your API keys) securely.
+
 ## Sample Data
 
 Three synthetic `.eml` files are included for testing:
