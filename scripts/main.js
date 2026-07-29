@@ -32,26 +32,29 @@ const isLocalhost =
 // Store attachment contents for hash lookups (keyed by attachment filename)
 const attachmentContentMap = new Map();
 
-// Build API endpoint - uses local proxy when running locally, direct API on GitHub Pages
+// CORS proxy for GitHub Pages (free public proxy)
+const CORS_PROXY = "https://corsproxy.io/?";
+
+// Build API endpoint - uses local proxy when running locally, CORS proxy on GitHub Pages
 function getVTEndpoint(path) {
   if (isLocalhost) {
     return "http://localhost:8080/proxy/vt" + path;
   }
-  return "https://www.virustotal.com" + path;
+  return CORS_PROXY + "https://www.virustotal.com" + path;
 }
 
 function getVTSubmitEndpoint() {
   if (isLocalhost) {
     return "http://localhost:8080/proxy/vt-submit";
   }
-  return "https://www.virustotal.com/api/v3/urls";
+  return CORS_PROXY + "https://www.virustotal.com/api/v3/urls";
 }
 
 function getAbuseIPDBEndpoint(query) {
   if (isLocalhost) {
     return "http://localhost:8080/proxy/abuseipdb" + query;
   }
-  return "https://api.abuseipdb.com/api/v2" + query;
+  return CORS_PROXY + "https://api.abuseipdb.com/api/v2" + query;
 }
 
 // Safely get localStorage value
