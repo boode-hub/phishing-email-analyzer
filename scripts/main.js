@@ -22,6 +22,7 @@ let currentAnalysis = null;
 let apiKeys = {
   virustotal: "",
   abuseipdb: "",
+  corsProxyUrl: "",
 };
 
 // Detect if running locally (via node server.js) vs GitHub Pages
@@ -32,35 +33,50 @@ const isLocalhost =
 // Store attachment contents for hash lookups (keyed by attachment filename)
 const attachmentContentMap = new Map();
 
-// CORS proxy for GitHub Pages (free public proxy)
-const CORS_PROXY = "https://api.allorigins.win/raw?url=";
+// CORS proxy URL - user configurable in settings
+function getCORSProxy() {
+  return apiKeys.corsProxyUrl || "";
+}
 
 // Build API endpoint - uses local proxy when running locally, CORS proxy on GitHub Pages
 function getVTEndpoint(path) {
   if (isLocalhost) {
     return "http://localhost:8080/proxy/vt" + path;
   }
-  return CORS_PROXY + "https://www.virustotal.com" + path;
+  const proxy = getCORSProxy();
+  if (proxy) {
+    return proxy + "https://www.virustotal.com" + path;
+  }
+  return "https://www.virustotal.com" + path;
 }
 
 function getVTSubmitEndpoint() {
   if (isLocalhost) {
     return "http://localhost:8080/proxy/vt-submit";
   }
-  return CORS_PROXY + "https://www.virustotal.com/api/v3/urls";
+  const proxy = getCORSProxy();
+  if (proxy) {
+    return proxy + "https://www.virustotal.com/api/v3/urls";
+  }
+  return "https://www.virustotal.com/api/v3/urls";
 }
 
 function getAbuseIPDBEndpoint(query) {
   if (isLocalhost) {
     return "http://localhost:8080/proxy/abuseipdb" + query;
   }
-  return CORS_PROXY + "https://api.abuseipdb.com/api/v2" + query;
+  const proxy = getCORSProxy();
+  if (proxy) {
+    return proxy + "https://api.abuseipdb.com/api/v2" + query;
+  }
+  return "https://api.abuseipdb.com/api/v2" + query;
 }
 
 // Safely get localStorage value
 try {
   apiKeys.virustotal = localStorage.getItem("vt-api-key") || "";
   apiKeys.abuseipdb = localStorage.getItem("abuseipdb-api-key") || "";
+  apiKeys.corsProxyUrl = localStorage.getItem("cors-proxy-url") || "";
 } catch (e) {
   console.warn("localStorage not available:", e);
 }
@@ -81,6 +97,7 @@ function queryElements() {
     clearKeys: "clear-keys",
     virustotalKeyInput: "virustotal-key",
     abuseipdbKeyInput: "abuseipdb-key",
+    corsProxyUrlInput: "cors-proxy-url",
   };
   for (const [key, id] of Object.entries(ids)) {
     elements[key] = document.getElementById(id);
@@ -100,6 +117,9 @@ function init() {
   }
   if (elements.abuseipdbKeyInput) {
     elements.abuseipdbKeyInput.value = apiKeys.abuseipdb;
+  }
+  if (elements.corsProxyUrlInput) {
+    elements.corsProxyUrlInput.value = apiKeys.corsProxyUrl;
   }
 
   // Event Listeners
@@ -321,6 +341,9 @@ function handleSaveSettings() {
   apiKeys.abuseipdb = elements.abuseipdbKeyInput
     ? elements.abuseipdbKeyInput.value.trim()
     : "";
+  apiKeys.corsProxyUrl = elements.corsProxyUrlInput
+    ? elements.corsProxyUrlInput.value.trim()
+    : "";
 
   try {
     if (apiKeys.virustotal) {
@@ -333,6 +356,12 @@ function handleSaveSettings() {
       localStorage.setItem("abuseipdb-api-key", apiKeys.abuseipdb);
     } else {
       localStorage.removeItem("abuseipdb-api-key");
+    }
+
+    if (apiKeys.corsProxyUrl) {
+      localStorage.setItem("cors-proxy-url", apiKeys.corsProxyUrl);
+    } else {
+      localStorage.removeItem("cors-proxy-url");
     }
   } catch (e) {
     console.warn("localStorage not available:", e);
@@ -348,11 +377,14 @@ function handleSaveSettings() {
 function handleClearKeys() {
   apiKeys.virustotal = "";
   apiKeys.abuseipdb = "";
+  apiKeys.corsProxyUrl = "";
   if (elements.virustotalKeyInput) elements.virustotalKeyInput.value = "";
   if (elements.abuseipdbKeyInput) elements.abuseipdbKeyInput.value = "";
+  if (elements.corsProxyUrlInput) elements.corsProxyUrlInput.value = "";
   try {
     localStorage.removeItem("vt-api-key");
     localStorage.removeItem("abuseipdb-api-key");
+    localStorage.removeItem("cors-proxy-url");
   } catch (e) {
     console.warn("localStorage not available:", e);
   }
