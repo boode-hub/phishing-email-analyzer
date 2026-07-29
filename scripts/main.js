@@ -33,7 +33,7 @@ const isLocalhost =
 const attachmentContentMap = new Map();
 
 // CORS proxy for GitHub Pages (free public proxy)
-const CORS_PROXY = "https://corsproxy.io/?";
+const CORS_PROXY = "https://api.allorigins.win/raw?url=";
 
 // Build API endpoint - uses local proxy when running locally, CORS proxy on GitHub Pages
 function getVTEndpoint(path) {
