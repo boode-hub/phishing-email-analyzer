@@ -113,6 +113,33 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // ===== PROXY: VirusTotal Analyze (Rescan) =====
+  if (req.url.startsWith("/proxy/vt-analyze/") && req.method === "POST") {
+    const vtPath = req.url.replace("/proxy/vt-analyze", "");
+    const vtUrl = `https://www.virustotal.com${vtPath}`;
+
+    let body = "";
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", () => {
+      const headers = {
+        Accept: "application/json",
+      };
+      const apiKey = req.headers["x-apikey"];
+      if (apiKey) {
+        headers["x-apikey"] = apiKey;
+      }
+
+      // Only set Content-Type if there's a body
+      if (body) {
+        headers["Content-Type"] = "application/x-www-form-urlencoded";
+      }
+
+      console.log("[Proxy] VT Analyze ->", vtUrl);
+      proxyRequest(vtUrl, { method: "POST", headers, body: body || undefined }, res);
+    });
+    return;
+  }
+
   // ===== PROXY: AbuseIPDB =====
   if (req.url.startsWith("/proxy/abuseipdb")) {
     const query = req.url.replace("/proxy/abuseipdb", "");

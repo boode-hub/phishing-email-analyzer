@@ -61,6 +61,17 @@ function getVTSubmitEndpoint() {
   return "https://www.virustotal.com/api/v3/urls";
 }
 
+function getVTAnalyzeEndpoint(path) {
+  if (isLocalhost) {
+    return "http://localhost:8080/proxy/vt-analyze" + path;
+  }
+  const proxy = getCORSProxy();
+  if (proxy) {
+    return proxy + "https://www.virustotal.com" + path;
+  }
+  return "https://www.virustotal.com" + path;
+}
+
 function getAbuseIPDBEndpoint(query) {
   if (isLocalhost) {
     return "http://localhost:8080/proxy/abuseipdb" + query;
@@ -403,7 +414,7 @@ async function renderResults(analysis) {
   const verdictSection = document.getElementById("verdict-section");
   const verdictContent = document.getElementById("verdict-content");
   if (verdictSection) verdictSection.classList.remove("hidden");
-  if (verdictContent) renderVerdict(verdictContent, analysis.score);
+  if (verdictContent) renderVerdict(verdictContent, analysis.score, analysis.languageAnalysis);
 
   // Show auth section
   const authSection = document.getElementById("auth-section");
@@ -489,6 +500,19 @@ async function lookupVirusTotal(btn) {
   const value = btn.dataset.value;
   const type = btn.dataset.type;
   if (!value || !apiKeys.virustotal) return;
+
+  // Validate key format (VT keys are 64-char hex)
+  const key = apiKeys.virustotal.trim();
+  if (!/^[a-f0-9]{64}$/i.test(key)) {
+    const row = btn.closest("tr");
+    const resultRow = row?.nextElementSibling;
+    const resultContent = resultRow?.querySelector(".lookup-result-content");
+    if (resultContent) {
+      resultRow.classList.remove("hidden");
+      resultContent.innerHTML = '<span class="lookup-error">Invalid VirusTotal API key format. Key should be 64 hex characters. Check Settings.</span>';
+    }
+    return;
+  }
 
   // Find the result row
   const row = btn.closest("tr");
@@ -580,8 +604,13 @@ async function lookupVirusTotal(btn) {
     }
 
     if (!response.ok) {
-      const err = await response.json();
-      resultContent.innerHTML = `<span class="lookup-error">Error: ${esc(err.error?.message || `HTTP ${response.status}`)}</span>`;
+      const err = await response.json().catch(() => ({}));
+      const errMsg = err.error?.message || `HTTP ${response.status}`;
+      let hint = "";
+      if (response.status === 401) hint = " API key is invalid or missing.";
+      else if (response.status === 429) hint = " Rate limited. Wait a moment and try again.";
+      else if (response.status === 403) hint = " API key lacks required permissions.";
+      resultContent.innerHTML = `<span class="lookup-error">Error:${hint} ${esc(errMsg)}</span>`;
       return;
     }
 
@@ -600,17 +629,42 @@ async function lookupVirusTotal(btn) {
 
     // Build type-specific display
     let typeLabel = "VirusTotal";
-    if (type === "attachment") typeLabel = "VirusTotal (File Hash)";
-    else if (type === "ip") typeLabel = "VirusTotal (IP)";
-    else if (type === "domain") typeLabel = "VirusTotal (Domain)";
+    let analyzePath = "";
+    if (type === "attachment") {
+      typeLabel = "VirusTotal (File Hash)";
+      const content = attachmentContentMap.get(value);
+      if (content) {
+        const hash = await sha256(content);
+        analyzePath = `/api/v3/files/${hash}/analyze`;
+      }
+    } else if (type === "ip") {
+      typeLabel = "VirusTotal (IP)";
+      analyzePath = `/api/v3/ip_addresses/${encodeURIComponent(value)}/analyze`;
+    } else if (type === "domain") {
+      typeLabel = "VirusTotal (Domain)";
+      analyzePath = `/api/v3/domains/${encodeURIComponent(value)}/analyze`;
+    } else {
+      typeLabel = "VirusTotal (URL)";
+      analyzePath = `/api/v3/urls/${btoa(value).replace(/=/g, "")}/analyze`;
+    }
+
+    // Build creation date line
+    let creationDateHtml = "";
+    if (attrs.creation_date) {
+      creationDateHtml = `<div class="lookup-meta">Created: ${new Date(attrs.creation_date * 1000).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" })}</div>`;
+    } else if (type === "domain" && attrs註冊_date) {
+      creationDateHtml = `<div class="lookup-meta">Created: ${new Date(attrs.註冊_date * 1000).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" })}</div>`;
+    }
 
     resultContent.innerHTML = `
       <div class="lookup-result vt-result">
         <div class="lookup-header">
           <strong>${esc(typeLabel)}</strong>
-          <span class="lookup-reputation ${reputationClass}">
-            ${malicious > 0 ? "⚠ MALICIOUS" : suspicious > 0 ? "⚡ SUSPICIOUS" : "✓ CLEAN"}
-          </span>
+          <div class="lookup-header-actions">
+            <span class="lookup-reputation ${reputationClass}">
+              ${malicious > 0 ? "MALICIOUS" : suspicious > 0 ? "SUSPICIOUS" : "CLEAN"}
+            </span>
+          </div>
         </div>
         <div class="lookup-stats">
           <span class="stat malicious">${malicious} malicious</span>
@@ -618,16 +672,31 @@ async function lookupVirusTotal(btn) {
           <span class="stat harmless">${stats.harmless || 0} harmless</span>
           <span class="stat undetected">${stats.undetected || 0} undetected</span>
         </div>
-        ${attrs.last_analysis_date ? `<div class="lookup-date">Last analyzed: ${new Date(attrs.last_analysis_date * 1000).toLocaleString()}</div>` : ""}
-        ${attrs.reputation != null ? `<div class="lookup-rep-score">Reputation: ${attrs.reputation}</div>` : ""}
-        ${attrs.as_owner ? `<div class="lookup-usage">AS Owner: ${esc(attrs.as_owner)}</div>` : ""}
-        ${attrs.country ? `<div class="lookup-usage">Country: ${esc(attrs.country)}</div>` : ""}
-        ${attrs.meaningful_name ? `<div class="lookup-usage">Name: ${esc(attrs.meaningful_name)}</div>` : ""}
+        ${creationDateHtml}
+        ${attrs.last_analysis_date ? `<div class="lookup-meta">Last analyzed: ${new Date(attrs.last_analysis_date * 1000).toLocaleString()}</div>` : ""}
+        ${attrs.reputation != null ? `<div class="lookup-meta">Reputation: ${attrs.reputation}</div>` : ""}
+        ${attrs.as_owner ? `<div class="lookup-meta">AS Owner: ${esc(attrs.as_owner)}</div>` : ""}
+        ${attrs.country ? `<div class="lookup-meta">Country: ${esc(attrs.country)}</div>` : ""}
+        ${attrs.meaningful_name ? `<div class="lookup-meta">Name: ${esc(attrs.meaningful_name)}</div>` : ""}
+        ${analyzePath ? `<div class="lookup-actions"><button class="btn-rescan" onclick="rescanVT('${esc(analyzePath)}', this)" title="Force fresh analysis on VirusTotal">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+          Rescan
+        </button>
+        <a href="https://www.virustotal.com/gui/search/${encodeURIComponent(value)}" target="_blank" rel="noopener" class="btn-vt-web">Open in VT ↗</a>
+        </div>` : ""}
       </div>
     `;
   } catch (error) {
     // Always provide web fallback for any error (CORS, network, rate limit, etc.)
     let webUrl = "";
+    let specificHint = "";
+    if (error.message?.includes("Failed to fetch") || error.message?.includes("NetworkError")) {
+      if (isLocalhost) {
+        specificHint = "Is the server running? Start it with: node server.js";
+      } else {
+        specificHint = "CORS error. Configure a CORS proxy in Settings or run locally with: node server.js";
+      }
+    }
     if (type === "attachment") {
       const content = attachmentContentMap.get(value);
       if (content) {
@@ -655,6 +724,7 @@ async function lookupVirusTotal(btn) {
           <span class="lookup-reputation lookup-suspicious">API UNAVAILABLE</span>
         </div>
         <div class="lookup-info">
+          ${specificHint ? `<div style="margin-bottom:6px;color:var(--accent,#9fef00);font-weight:600">${esc(specificHint)}</div>` : ""}
           ${esc(error.message || "Could not connect to VirusTotal API.")}
           <a href="${webUrl}" target="_blank" rel="noopener" class="btn-lookup" style="display:inline-block;margin-top:8px;">Open in VirusTotal ↗</a>
         </div>
@@ -669,6 +739,19 @@ async function lookupVirusTotal(btn) {
 async function lookupAbuseIPDB(btn) {
   const ip = btn.dataset.value;
   if (!ip || !apiKeys.abuseipdb) return;
+
+  // Validate key format (AbuseIPDB keys are typically 40+ chars)
+  const key = apiKeys.abuseipdb.trim();
+  if (key.length < 20) {
+    const row = btn.closest("tr");
+    const resultRow = row?.nextElementSibling;
+    const resultContent = resultRow?.querySelector(".lookup-result-content");
+    if (resultContent) {
+      resultRow.classList.remove("hidden");
+      resultContent.innerHTML = '<span class="lookup-error">Invalid AbuseIPDB API key format. Check Settings.</span>';
+    }
+    return;
+  }
 
   // Find the result row
   const row = btn.closest("tr");
@@ -694,8 +777,12 @@ async function lookupAbuseIPDB(btn) {
     );
 
     if (!response.ok) {
-      const err = await response.json();
-      resultContent.innerHTML = `<span class="lookup-error">Error: ${esc(err.errors?.[0]?.detail || `HTTP ${response.status}`)}</span>`;
+      const err = await response.json().catch(() => ({}));
+      const errMsg = err.errors?.[0]?.detail || `HTTP ${response.status}`;
+      let hint = "";
+      if (response.status === 401) hint = " API key is invalid. ";
+      else if (response.status === 429) hint = " Rate limited. Wait and try again. ";
+      resultContent.innerHTML = `<span class="lookup-error">Error:${hint}${esc(errMsg)}</span>`;
       return;
     }
 
@@ -731,6 +818,14 @@ async function lookupAbuseIPDB(btn) {
     `;
   } catch (error) {
     const webUrl = `https://www.abuseipdb.com/check/${encodeURIComponent(ip)}`;
+    let specificHint = "";
+    if (error.message?.includes("Failed to fetch") || error.message?.includes("NetworkError")) {
+      if (isLocalhost) {
+        specificHint = "Is the server running? Start it with: node server.js";
+      } else {
+        specificHint = "CORS error. Configure a CORS proxy in Settings or run locally.";
+      }
+    }
     resultContent.innerHTML = `
       <div class="lookup-result">
         <div class="lookup-header">
@@ -738,6 +833,7 @@ async function lookupAbuseIPDB(btn) {
           <span class="lookup-reputation lookup-suspicious">API UNAVAILABLE</span>
         </div>
         <div class="lookup-info">
+          ${specificHint ? `<div style="margin-bottom:6px;color:var(--accent,#9fef00);font-weight:600">${esc(specificHint)}</div>` : ""}
           ${esc(error.message || "Could not connect to AbuseIPDB API.")}
           <a href="${webUrl}" target="_blank" rel="noopener" class="btn-lookup" style="display:inline-block;margin-top:8px;">Open in AbuseIPDB ↗</a>
         </div>
@@ -756,11 +852,104 @@ function esc(s) {
   return div.innerHTML;
 }
 
+// ===== VT RESCAN =====
+async function rescanVT(analyzePath, btn) {
+  if (!apiKeys.virustotal) return;
+  btn.disabled = true;
+  btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg> Rescanning...';
+
+  try {
+    const url = getVTAnalyzeEndpoint(analyzePath);
+    console.log("[VT] Rescan ->", url);
+
+    // Use form-encoded body for URL submissions (VT requirement)
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "x-apikey": apiKeys.virustotal,
+        Accept: "application/json",
+      },
+    });
+
+    console.log("[VT] Rescan status:", response.status);
+
+    // 204 = analysis queued successfully
+    if (response.status === 204 || response.ok) {
+      btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg> Queued';
+      btn.classList.add("rescan-queued");
+      const row = btn.closest(".lookup-result");
+      if (row) {
+        const infoDiv = document.createElement("div");
+        infoDiv.className = "lookup-meta";
+        infoDiv.textContent = "Analysis queued. Click VT again in ~30s for fresh results.";
+        row.appendChild(infoDiv);
+      }
+      return;
+    }
+
+    // 404 or other errors — try alternate submit approach for URLs
+    const errData = await response.json().catch(() => null);
+    console.error("[VT] Rescan response:", response.status, errData);
+
+    // For URLs, try the submit endpoint instead
+    if (analyzePath.includes("/urls/")) {
+      const urlId = analyzePath.match(/\/urls\/([^/]+)/)?.[1];
+      if (urlId) {
+        // Try POST /api/v3/urls to resubmit
+        const submitUrl = getVTAnalyzeEndpoint("/api/v3/urls");
+        const decoded = atob(urlId);
+        const submitResp = await fetch(submitUrl, {
+          method: "POST",
+          headers: {
+            "x-apikey": apiKeys.virustotal,
+            "Content-Type": "application/x-www-form-urlencoded",
+            Accept: "application/json",
+          },
+          body: `url=${encodeURIComponent(decoded)}`,
+        });
+        if (submitResp.ok || submitResp.status === 204) {
+          btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg> Queued';
+          btn.classList.add("rescan-queued");
+          const row = btn.closest(".lookup-result");
+          if (row) {
+            const infoDiv = document.createElement("div");
+            infoDiv.className = "lookup-meta";
+            infoDiv.textContent = "URL resubmitted for analysis.";
+            row.appendChild(infoDiv);
+          }
+          return;
+        }
+      }
+    }
+
+    const errMsg = errData?.error?.message || `HTTP ${response.status}`;
+    btn.innerHTML = 'Failed';
+    btn.classList.add("rescan-failed");
+    btn.title = errMsg;
+  } catch (error) {
+    console.error("[VT] Rescan error:", error);
+    btn.innerHTML = 'Failed';
+    btn.classList.add("rescan-failed");
+    btn.title = error.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 // Expose functions globally for inline onclick handlers
 window.lookupVirusTotal = lookupVirusTotal;
 window.lookupAbuseIPDB = lookupAbuseIPDB;
 window.copyIOC = copyIOC;
 window.toggleDefang = toggleDefang;
+window.promptSettings = promptSettings;
+window.rescanVT = rescanVT;
+
+// Prompt user to open settings (for disabled lookup buttons)
+function promptSettings() {
+  if (elements.settingsModal) {
+    elements.settingsModal.classList.remove("hidden");
+  }
+}
 
 // Initialize on DOM ready
 if (document.readyState === "loading") {

@@ -119,26 +119,54 @@ function extractFromHeaders(headers, iocs) {
     });
   }
 
+  // Extract from headers - collect all IPs with sources before dedup
+  // X-Originating-IP is checked first so we can flag it properly
+  const ipSourceMap = new Map(); // ip -> Set of sources
+
+  function trackIp(value, source) {
+    if (!ipSourceMap.has(value)) {
+      ipSourceMap.set(value, new Set());
+    }
+    ipSourceMap.get(value).add(source);
+  }
+
+  // Extract from X-Originating-IP (may contain multiple IPs, may be bracketed)
+  if (headers.xOriginatingIp) {
+    // Handle both raw IPs and bracketed IPs like [1.2.3.4]
+    const ipPattern = /\[?(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\]?/g;
+    let ipMatch;
+    while ((ipMatch = ipPattern.exec(headers.xOriginatingIp)) !== null) {
+      trackIp(ipMatch[1], "X-Originating-IP");
+    }
+  }
+
   // Extract IPs from Received headers
   if (headers.received && Array.isArray(headers.received)) {
     for (const received of headers.received) {
-      const ipMatch = received.match(
+      // Match IPs in brackets (most common: from [1.2.3.4])
+      const bracketMatch = received.match(
         /\[(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\]/,
       );
-      if (ipMatch) {
-        iocs.ips.push({ value: ipMatch[1], source: "Received" });
+      if (bracketMatch) {
+        trackIp(bracketMatch[1], "Received");
+      } else {
+        // Also match IPs not in brackets (e.g., "from mail.example.com 1.2.3.4")
+        const bareMatch = received.match(
+          /\bfrom\s+\S+\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b/,
+        );
+        if (bareMatch) {
+          trackIp(bareMatch[1], "Received");
+        }
       }
     }
   }
 
-  // Extract from X-Originating-IP
-  if (headers.xOriginatingIp) {
-    const ipMatch = headers.xOriginatingIp.match(
-      /(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/,
-    );
-    if (ipMatch) {
-      iocs.ips.push({ value: ipMatch[1], source: "X-Originating-IP" });
-    }
+  // Now push unique IPs with combined source info
+  for (const [ip, sources] of ipSourceMap) {
+    const primarySource = sources.has("X-Originating-IP")
+      ? "X-Originating-IP"
+      : "Received";
+    iocs.ips.push({ value: ip, source: primarySource, allSources: [...sources] });
   }
 
   // Extract Message-ID domain
@@ -324,18 +352,25 @@ function deduplicateAndFlag(iocs) {
     return true;
   });
 
-  // Deduplicate IPs
-  const seenIps = new Set();
-  iocs.ips = iocs.ips.filter((ip) => {
-    if (seenIps.has(ip.value)) return false;
-    seenIps.add(ip.value);
+  // Deduplicate IPs - already deduplicated during extraction, just add risk flags
+  iocs.ips = iocs.ips.map((ip) => {
     ip.riskFlags = [];
     ip.risks = [];
+
+    // Flag originating IPs as higher risk (can be spoofed)
+    if (ip.source === "X-Originating-IP") {
+      ip.riskFlags.push({ type: "medium", label: "Originating IP" });
+      ip.risks.push({
+        type: "originating-ip",
+        level: "medium",
+        message: "X-Originating-IP header (may be spoofed)",
+      });
+    }
 
     // Add defanged version
     ip.defanged = defang(ip.value);
 
-    return true;
+    return ip;
   });
 
   // Deduplicate emails

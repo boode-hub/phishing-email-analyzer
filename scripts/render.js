@@ -20,26 +20,66 @@ export async function renderSummary(container, analysis) {
   const rd = extractDomain(replyTo);
   const dm = rd !== sd && rd !== "N/A";
 
-  let html = '<div class="summary-grid">';
+  // Get auth statuses
+  const spfStatus = auth?.mechanisms?.spf?.status || "unknown";
+  const dkimStatus = auth?.mechanisms?.dkim?.status || "unknown";
+  const dmarcStatus = auth?.mechanisms?.dmarc?.status || "unknown";
+  const isAligned = !auth?.domainAlignment?.mismatches?.length;
 
-  html += mkCard(
-    "Subject",
-    "file",
-    [{ l: "Subject", v: trunc(subject, 40), t: subject, m: 1 }],
-    "neutral",
-  );
+  // Count IOCs
+  const urlCount = iocs?.urls?.length || 0;
+  const ipCount = iocs?.ips?.length || 0;
+  const domainCount = iocs?.domains?.length || 0;
+  const emailCount = iocs?.emails?.length || 0;
+  const attCount = iocs?.attachments?.length || 0;
+  const hasHighRisk = (iocs?.urls || []).some(u => u.riskFlags?.some(f => f.type === "high"));
+
+  let html = '';
+
+  // === TOP ROW: Auth badges + Score ===
+  html += '<div class="summary-top-row">';
+
+  // Authentication badges
+  html += `<div class="summary-auth-card">
+    <div class="auth-card-header">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+      <span>Authentication</span>
+    </div>
+    <div class="auth-badges-row">
+      <span class="auth-badge-pill ${spfStatus}">SPF ${esc(spfStatus.toUpperCase())}</span>
+      <span class="auth-badge-pill ${dkimStatus}">DKIM ${esc(dkimStatus.toUpperCase())}</span>
+      <span class="auth-badge-pill ${dmarcStatus}">DMARC ${esc(dmarcStatus.toUpperCase())}</span>
+      <span class="auth-badge-pill ${isAligned ? 'pass' : 'fail'}">${isAligned ? 'ALIGNED' : 'MISMATCHED'}</span>
+    </div>
+  </div>`;
+
+  // IOC summary mini-card
+  html += `<div class="summary-ioc-card">
+    <div class="ioc-card-header">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <span>IOCs Found</span>
+    </div>
+    <div class="ioc-count-grid">
+      ${urlCount ? `<div class="ioc-count-item ${hasHighRisk ? 'high' : ''}"><span class="ioc-count-num">${urlCount}</span><span class="ioc-count-label">URLs</span></div>` : ''}
+      ${domainCount ? `<div class="ioc-count-item"><span class="ioc-count-num">${domainCount}</span><span class="ioc-count-label">Domains</span></div>` : ''}
+      ${ipCount ? `<div class="ioc-count-item"><span class="ioc-count-num">${ipCount}</span><span class="ioc-count-label">IPs</span></div>` : ''}
+      ${emailCount ? `<div class="ioc-count-item"><span class="ioc-count-num">${emailCount}</span><span class="ioc-count-label">Emails</span></div>` : ''}
+      ${attCount ? `<div class="ioc-count-item ${iocs.attachments.some(a => isRiskyExt(a.filename)) ? 'high' : ''}"><span class="ioc-count-num">${attCount}</span><span class="ioc-count-label">Files</span></div>` : ''}
+      ${(!urlCount && !domainCount && !ipCount && !emailCount && !attCount) ? '<div class="ioc-count-item"><span class="ioc-count-num">0</span><span class="ioc-count-label">None</span></div>' : ''}
+    </div>
+  </div>`;
+
+  html += '</div>';
+
+  // === BOTTOM ROW: Sender details ===
+  html += '<div class="summary-bottom-row">';
 
   html += mkCard(
     "Sender",
     "user",
     [
-      { l: "From", v: trunc(from, 35), t: from, m: 1 },
-      {
-        l: "Domain",
-        v: sd,
-        m: 1,
-        c: isSuspiciousDomain(sd) ? "suspicious" : "",
-      },
+      { l: "From", v: trunc(from, 40), t: from, m: 1 },
+      { l: "Domain", v: sd, m: 1, c: isSuspiciousDomain(sd) ? "suspicious" : "" },
     ],
     isSuspiciousDomain(sd) ? "high" : "low",
   );
@@ -50,19 +90,13 @@ export async function renderSummary(container, analysis) {
     [
       {
         l: "Address",
-        v: trunc(replyTo, 35),
+        v: trunc(replyTo, 40),
         t: replyTo,
         m: 1,
         c: dm ? "suspicious" : "",
       },
       ...(dm
-        ? [
-            {
-              l: "Mismatch",
-              v: "Reply-To domain differs from From",
-              c: "malicious",
-            },
-          ]
+        ? [{ l: "Mismatch", v: "Differs from From domain", c: "malicious" }]
         : []),
     ],
     dm ? "high" : "low",
@@ -72,7 +106,7 @@ export async function renderSummary(container, analysis) {
     "Sender IP",
     "globe",
     [
-      { l: "Last Hop IP", v: sip, m: 1 },
+      { l: "Last Hop", v: sip, m: 1 },
       ...(isPrivateIP(sip)
         ? [{ l: "Warning", v: "Private/residential IP", c: "malicious" }]
         : []),
@@ -80,90 +114,8 @@ export async function renderSummary(container, analysis) {
     isPrivateIP(sip) ? "high" : "neutral",
   );
 
-  html += mkCard(
-    "Authentication",
-    "shield",
-    [
-      {
-        l: "Status",
-        v: auth?.overallStatus?.level
-          ? auth.overallStatus.level.toUpperCase()
-          : "N/A",
-        c:
-          getAuthRisk(auth) === "high"
-            ? "malicious"
-            : getAuthRisk(auth) === "low"
-              ? "verified"
-              : "suspicious",
-      },
-      {
-        l: "Alignment",
-        v:
-          auth?.domainAlignment?.mismatches?.length > 0
-            ? "MISMATCHED"
-            : "ALIGNED",
-        c:
-          auth?.domainAlignment?.mismatches?.length > 0
-            ? "malicious"
-            : "verified",
-      },
-    ],
-    getAuthRisk(auth),
-  );
+  html += '</div>';
 
-  const urlRows = [];
-  const urls = iocs?.urls || [];
-  if (urls.length) {
-    urlRows.push({ l: "Count", v: String(urls.length), m: 1 });
-    urls.slice(0, 5).forEach((u, i) => {
-      const hr = u.riskFlags?.some((f) => f.type === "high");
-      const mr = u.riskFlags?.some((f) => f.type === "medium");
-      const rc = hr ? "malicious" : mr ? "suspicious" : "verified";
-      urlRows.push({
-        l: `URL ${i + 1}`,
-        v: trunc(u.url, 35),
-        t: u.url,
-        m: 1,
-        c: rc,
-      });
-    });
-  }
-  html += mkCard(
-    "URLs",
-    "link",
-    urlRows.length ? urlRows : [{ l: "URLs", v: "None found", m: 1 }],
-    urls.some((u) => u.riskFlags?.some((f) => f.type === "high"))
-      ? "high"
-      : "low",
-  );
-
-  const langRows = buildLangRows(lang);
-  html += mkCard(
-    "Language Flags",
-    "file",
-    langRows.length ? langRows : [{ l: "Flags", v: "None detected", m: 1 }],
-    hasLangFlags(lang) ? "high" : "low",
-  );
-
-  const atts = iocs?.attachments || [];
-  html += mkCard(
-    "Attachments",
-    "clip",
-    atts.length
-      ? [
-          { l: "Count", v: String(atts.length), m: 1 },
-          ...atts.slice(0, 3).map((a) => ({
-            l: trunc(a.filename || "unnamed", 20),
-            v: formatBytes(a.size || 0),
-            m: 1,
-            c: isRiskyExt(a.filename) ? "malicious" : "",
-          })),
-        ]
-      : [{ l: "Attachments", v: "None", m: 1 }],
-    atts.some((a) => isRiskyExt(a.filename)) ? "high" : "low",
-  );
-
-  html += "</div>";
   container.innerHTML = html;
 }
 
@@ -342,7 +294,7 @@ function renderLangFlags(a) {
 }
 
 // ===== VERDICT =====
-export function renderVerdict(c, sc) {
+export function renderVerdict(c, sc, langAnalysis) {
   if (!sc) {
     c.innerHTML = "<p>No score data</p>";
     return;
@@ -353,7 +305,8 @@ export function renderVerdict(c, sc) {
       : sc.tier === "Suspicious"
         ? "tier-medium"
         : "tier-low";
-  c.innerHTML = `<div class="verdict-box ${tc}"><div class="verdict-tier">${esc(sc.tier || "Unknown")}</div><div class="verdict-score">Score: ${sc.score || 0}/100</div><div class="verdict-reasons">${(sc.reasons || []).map((r) => `<span class="reason-tag">${esc(r)}</span>`).join("")}</div></div><div class="score-breakdown">${["auth", "iocs", "language"].map((k) => `<div class="score-item"><span class="score-label">${esc(k.toUpperCase())}</span><div class="score-bar"><div class="score-fill" style="width:${sc.breakdown?.[k] || 0}%"></div></div><span class="score-value">${sc.breakdown?.[k] || 0}</span></div>`).join("")}</div>`;
+  const langFlagsHtml = langAnalysis ? renderLangFlags(langAnalysis) : "";
+  c.innerHTML = `<div class="verdict-box ${tc}"><div class="verdict-tier">${esc(sc.tier || "Unknown")}</div><div class="verdict-score">Score: ${sc.score || 0}/100</div><div class="verdict-reasons">${(sc.reasons || []).map((r) => `<span class="reason-tag">${esc(r)}</span>`).join("")}</div></div><div class="score-breakdown">${["auth", "iocs", "language"].map((k) => `<div class="score-item"><span class="score-label">${esc(k.toUpperCase())}</span><div class="score-bar"><div class="score-fill" style="width:${sc.breakdown?.[k] || 0}%"></div></div><span class="score-value">${sc.breakdown?.[k] || 0}</span></div>`).join("")}</div>${langFlagsHtml ? `<div class="lang-flags-section"><h4>Language Flags</h4>${langFlagsHtml}</div>` : ""}`;
 }
 
 // ===== AUTHENTICATION =====
@@ -402,7 +355,7 @@ export function renderAuth(c, auth) {
   const recvHtml = recv
     .map(
       (hop, i) =>
-        `<div class="received-hop ${hop.suspicious ? "suspicious-hop" : ""}"><div class="hop-num">${i + 1}</div><div class="hop-details"><div class="hop-from">From: ${esc(hop.from || "N/A")}</div><div class="hop-by">By: ${esc(hop.by || "N/A")}</div><div class="hop-ip">IP: <span class="mono">${esc(hop.ip || "N/A")}</span></div><div class="hop-date">${esc(hop.date || "N/A")}</div>${hop.suspicious ? '<div class="hop-warning">⚠ Suspicious hop</div>' : ""}</div></div>`,
+        `<div class="received-hop ${hop.suspicious ? "suspicious-hop" : ""}"><div class="hop-num">${i + 1}</div><div class="hop-details"><div class="hop-from">From: ${esc(hop.from || "N/A")}</div><div class="hop-by">By: ${esc(hop.by || "N/A")}</div><div class="hop-ip">IP: <span class="mono">${esc(hop.ip || "N/A")}</span></div><div class="hop-date">${esc(hop.date || "N/A")}</div>${hop.suspicious ? '<div class="hop-warning">&#9888; Suspicious hop</div>' : ""}</div></div>`,
     )
     .join("");
 
@@ -452,40 +405,50 @@ function renderIOCSection(title, items, type, apiKeys) {
         .map((f) => `<span class="risk-tag ${f.type}">${esc(f.label)}</span>`)
         .join("");
       const defanged = defang(value);
-      let lookupBtn = "";
       const hasVtKey = apiKeys?.virustotal;
       const hasAbuseKey = apiKeys?.abuseipdb;
 
-      if (type === "url" || type === "domain") {
-        lookupBtn = hasVtKey
-          ? `<button class="btn-lookup" data-value="${esc(value)}" data-type="${type}" onclick="lookupVirusTotal(this)">Check VT</button>`
-          : '<span class="lookup-hint">Add VT key in Settings</span>';
-      } else if (type === "ip") {
-        // Show both VT and AbuseIPDB for IPs
-        const vtBtn = hasVtKey
-          ? `<button class="btn-lookup" data-value="${esc(value)}" data-type="ip" onclick="lookupVirusTotal(this)">Check VT</button>`
-          : "";
-        const abuseBtn = hasAbuseKey
-          ? `<button class="btn-lookup" data-value="${esc(value)}" onclick="lookupAbuseIPDB(this)">Check AbuseIPDB</button>`
-          : "";
-        if (!vtBtn && !abuseBtn) {
-          lookupBtn =
-            '<span class="lookup-hint">Add API keys in Settings</span>';
-        } else {
-          lookupBtn = vtBtn + abuseBtn;
-        }
-      } else if (type === "attachment") {
-        // For attachments, show hash lookup if content available
-        const itemObj = typeof item === "object" ? item : {};
-        if (itemObj.content && hasVtKey) {
-          lookupBtn = `<button class="btn-lookup" data-value="${esc(value)}" data-type="attachment" data-has-content="true" onclick="lookupVirusTotal(this)">Check VT Hash</button>`;
-        } else if (hasVtKey) {
-          lookupBtn = `<button class="btn-lookup" data-value="${esc(value)}" data-type="attachment" data-has-content="false" onclick="lookupVirusTotal(this)">Check VT Hash</button>`;
-        } else {
-          lookupBtn = '<span class="lookup-hint">Add VT key in Settings</span>';
+      const vtBtn = hasVtKey
+        ? `<button class="btn-ioc-lookup btn-vt" data-value="${esc(value)}" data-type="${type}" onclick="lookupVirusTotal(this)" title="Check VirusTotal">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            VT
+          </button>`
+        : `<button class="btn-ioc-lookup btn-vt disabled" onclick="promptSettings()" title="Add VirusTotal API key in Settings">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            VT
+          </button>`;
+
+      let abuseBtn = "";
+      if (type === "ip") {
+        abuseBtn = hasAbuseKey
+          ? `<button class="btn-ioc-lookup btn-abuse" data-value="${esc(value)}" onclick="lookupAbuseIPDB(this)" title="Check AbuseIPDB">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+              AbuseIPDB
+            </button>`
+          : `<button class="btn-ioc-lookup btn-abuse disabled" onclick="promptSettings()" title="Add AbuseIPDB API key in Settings">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+              AbuseIPDB
+            </button>`;
+      }
+
+      // For email addresses, add a VT domain lookup button
+      let emailDomainBtn = "";
+      if (type === "email" && value && value.includes("@")) {
+        const domain = value.split("@")[1];
+        if (domain) {
+          emailDomainBtn = hasVtKey
+            ? `<button class="btn-ioc-lookup btn-vt" data-value="${esc(domain)}" data-type="domain" onclick="lookupVirusTotal(this)" title="Check domain on VirusTotal">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                VT Domain
+              </button>`
+            : `<button class="btn-ioc-lookup btn-vt disabled" onclick="promptSettings()" title="Add VirusTotal API key in Settings">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                VT Domain
+              </button>`;
         }
       }
-      return `<tr><td><span class="ioc-original mono">${esc(value)}</span><span class="ioc-defanged mono hidden">${esc(defanged)}</span></td><td>${riskHtml}</td><td class="ioc-actions"><button class="btn-sm" onclick="copyIOC(this)">Copy</button><button class="btn-sm" onclick="toggleDefang(this)">Defang</button>${lookupBtn}</td></tr><tr class="lookup-result-row hidden" data-ioc-value="${esc(value)}"><td colspan="3" class="lookup-result-cell"><div class="lookup-result-content"></div></td></tr>`;
+
+      return `<tr class="ioc-row"><td class="ioc-value-cell"><span class="ioc-original mono">${esc(value)}</span><span class="ioc-defanged mono hidden">${esc(defanged)}</span></td><td class="ioc-risk-cell">${riskHtml}</td><td class="ioc-actions"><button class="btn-sm" onclick="copyIOC(this)" title="Copy">Copy</button><button class="btn-sm" onclick="toggleDefang(this)" title="Defang">Defang</button><div class="ioc-lookup-btns">${vtBtn}${emailDomainBtn}${abuseBtn}</div></td></tr><tr class="lookup-result-row hidden" data-ioc-value="${esc(value)}"><td colspan="3" class="lookup-result-cell"><div class="lookup-result-content"></div></td></tr>`;
     })
     .join("");
   return `<div class="ioc-section"><h3>${esc(title)} (${items.length})</h3><table class="ioc-table"><thead><tr><th>Value</th><th>Risk</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div>`;

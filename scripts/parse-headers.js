@@ -61,6 +61,27 @@ function findHeaderBodyBoundary(input) {
   if (lfIndex !== -1) {
     return lfIndex;
   }
+
+  // Fallback: look for the first blank line that follows a header-like line
+  const lines = input.split(/\r?\n/);
+  for (let i = 1; i < lines.length; i++) {
+    const prevLine = lines[i - 1];
+    const currLine = lines[i];
+    // Blank line after a header line (contains colon) = end of headers
+    if (
+      currLine.trim() === "" &&
+      prevLine.includes(":") &&
+      !prevLine.startsWith(" ")
+    ) {
+      // Calculate the offset
+      let offset = 0;
+      for (let j = 0; j < i; j++) {
+        offset += lines[j].length + 1; // +1 for newline
+      }
+      return offset;
+    }
+  }
+
   return input.length;
 }
 
@@ -103,27 +124,47 @@ function parseHeaderLines(unfolded) {
 
 /**
  * Extract email address from header value
+ * Handles: "Name <email>", plain email, comments, multiple addresses
  */
 function extractAddress(headerValue) {
   if (!headerValue) return null;
 
+  // Remove RFC 2047 encoded-words comments that may contain parenthesized text
+  let cleaned = headerValue.replace(/\([^()]*\)/g, "").trim();
+
   // Handle "Name <email@domain>" format
-  const angleMatch = headerValue.match(/<([^>]+)>/);
+  const angleMatch = cleaned.match(/<([^>]+)>/);
   if (angleMatch) {
-    const name = headerValue.replace(/<[^>]+>/, "").trim();
-    return {
-      raw: headerValue,
-      email: angleMatch[1].toLowerCase(),
-      name: name || null,
-    };
+    const name = cleaned.replace(/<[^>]+>/, "").replace(/"/g, "").trim();
+    const email = angleMatch[1].trim().toLowerCase();
+    // Validate it looks like an email
+    if (/^[^\s<>]+@[^\s<>]+\.[^\s<>]+$/.test(email)) {
+      return {
+        raw: headerValue,
+        email,
+        name: name || null,
+      };
+    }
   }
 
-  // Handle plain email@domain format
-  const plainMatch = headerValue.match(/([^\s<>]+@[^\s<>]+)/);
+  // Handle plain email@domain format (no angle brackets)
+  const plainMatch = cleaned.match(/([^\s<>;,]+@[^\s<>;,]+\.[^\s<>;,]+)/);
   if (plainMatch) {
     return {
       raw: headerValue,
       email: plainMatch[1].toLowerCase(),
+      name: null,
+    };
+  }
+
+  // Last resort: try to find any email-like pattern
+  const fallbackMatch = headerValue.match(
+    /([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/,
+  );
+  if (fallbackMatch) {
+    return {
+      raw: headerValue,
+      email: fallbackMatch[1].toLowerCase(),
       name: null,
     };
   }

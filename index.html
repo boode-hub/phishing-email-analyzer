@@ -7,7 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
     <link rel="stylesheet" href="styles/main.css" />
@@ -27,9 +27,8 @@
           <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
         </svg>
         <span
-          >This tool runs entirely in your browser. Nothing is uploaded or
-          transmitted, except IOCs you explicitly submit to VirusTotal/AbuseIPDB
-          using your own API key (see Settings).</span
+          >All analysis runs locally in your browser. Nothing is uploaded unless
+          you explicitly use VirusTotal/AbuseIPDB with your own API key.</span
         >
       </div>
 
@@ -38,8 +37,8 @@
         <h1>Phishing Email Analyzer</h1>
         <button id="settings-btn" class="btn btn-secondary" title="Settings">
           <svg
-            width="20"
-            height="20"
+            width="16"
+            height="16"
             viewBox="0 0 24 24"
             fill="none"
             stroke="currentColor"
@@ -50,6 +49,7 @@
               d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"
             />
           </svg>
+          Settings
         </button>
       </header>
 
@@ -58,22 +58,25 @@
         <h2>Email Input</h2>
         <div class="input-methods">
           <div class="input-method">
-            <label for="email-input">Paste email source or headers:</label>
+            <label for="email-input">Paste raw email or headers</label>
             <textarea
               id="email-input"
-              placeholder="Paste raw email headers or full email source here..."
+              placeholder="Paste raw email headers or full .eml source here..."
             ></textarea>
           </div>
           <div class="input-method">
-            <label for="file-upload">Or upload file:</label>
+            <label for="file-upload">Or upload file</label>
             <input type="file" id="file-upload" accept=".eml,.txt,.msg" />
             <small class="file-hint"
-              >.eml and .txt supported. .msg support coming soon.</small
+              >.eml and .txt supported. .msg coming soon.</small
             >
           </div>
         </div>
         <div class="input-actions">
           <button id="analyze-btn" class="btn btn-primary">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+            </svg>
             Analyze Email
           </button>
           <button id="clear-btn" class="btn btn-secondary">Clear</button>
@@ -81,37 +84,37 @@
         <div id="input-status" class="status-message"></div>
       </section>
 
-      <!-- Focused Summary -->
+      <!-- Quick Summary -->
       <section id="summary-section" class="panel hidden">
         <h2>Quick Summary</h2>
         <div id="summary-content"></div>
       </section>
 
-      <!-- Verdict Summary -->
+      <!-- Verdict -->
       <section id="verdict-section" class="panel hidden">
         <h2>Analysis Result</h2>
         <div id="verdict-content"></div>
       </section>
 
-      <!-- Authentication Panel -->
+      <!-- Authentication -->
       <section id="auth-section" class="panel hidden">
         <h2>Email Authentication</h2>
         <div id="auth-content"></div>
       </section>
 
-      <!-- IOC Panel -->
+      <!-- IOCs -->
       <section id="ioc-section" class="panel hidden">
-        <h2>Indicators of Compromise (IOCs)</h2>
+        <h2>Indicators of Compromise</h2>
         <div id="ioc-content"></div>
       </section>
 
-      <!-- Body & Language Analysis -->
+      <!-- Body & Language -->
       <section id="body-section" class="panel hidden">
-        <h2>Body & Language Analysis</h2>
+        <h2>Body &amp; Language Analysis</h2>
         <div id="body-content"></div>
       </section>
 
-      <!-- Header Details -->
+      <!-- Headers -->
       <section id="headers-section" class="panel hidden">
         <h2>Email Headers</h2>
         <div id="headers-content"></div>
@@ -126,42 +129,41 @@
           </div>
           <div class="modal-body">
             <p class="settings-note">
-              Your keys are stored only in this browser and are sent only to
-              VirusTotal/AbuseIPDB when you click a lookup button below. Nothing
-              is sent automatically.
+              API keys are stored in this browser only. They are sent only to
+              VirusTotal/AbuseIPDB when you click a lookup button.
             </p>
 
             <div class="setting-field">
-              <label for="virustotal-key">VirusTotal API Key:</label>
+              <label for="virustotal-key">VirusTotal API Key</label>
               <input
                 type="password"
                 id="virustotal-key"
                 placeholder="Enter your VirusTotal API key"
               />
-              <small>Used for URL and domain lookups</small>
+              <small>Used for URL, domain, IP, and file hash lookups</small>
             </div>
 
             <div class="setting-field">
-              <label for="abuseipdb-key">AbuseIPDB API Key:</label>
+              <label for="abuseipdb-key">AbuseIPDB API Key</label>
               <input
                 type="password"
                 id="abuseipdb-key"
                 placeholder="Enter your AbuseIPDB API key"
               />
-              <small>Used for IP address lookups</small>
+              <small>Used for IP address reputation lookups</small>
             </div>
 
             <div class="setting-field">
-              <label for="cors-proxy-url">CORS Proxy URL (optional):</label>
+              <label for="cors-proxy-url">CORS Proxy URL (optional)</label>
               <input
                 type="text"
                 id="cors-proxy-url"
                 placeholder="https://your-worker.workers.dev?url="
               />
               <small>
-                Required for GitHub Pages. Use a
-                <a href="https://github.com/boode-hub/phishing-email-analyzer/blob/master/cors-worker.js" target="_blank">Cloudflare Worker</a>
-                or run locally with <code>node server.js</code>
+                Required for GitHub Pages deployments. See
+                <a href="https://github.com/boode-hub/phishing-email-analyzer/blob/master/cors-worker.js" target="_blank">cors-worker.js</a>
+                for setup.
               </small>
             </div>
 
