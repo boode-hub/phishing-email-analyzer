@@ -565,13 +565,17 @@ async function lookupVirusTotal(btn) {
     console.log("[VT] Fetching:", endpoint);
     console.log("[VT] Key prefix:", apiKeys.virustotal.substring(0, 8) + "...");
 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
     const response = await fetch(endpoint, {
       method: "GET",
       headers: {
         "x-apikey": apiKeys.virustotal,
         Accept: "application/json",
       },
+      signal: controller.signal,
     });
+    clearTimeout(timeoutId);
 
     console.log("[VT] Response status:", response.status);
 
@@ -579,6 +583,8 @@ async function lookupVirusTotal(btn) {
       // URL not analyzed yet - submit for analysis
       resultContent.innerHTML =
         '<span class="lookup-info">URL not found in VirusTotal. Submitting for analysis...</span>';
+      const submitController = new AbortController();
+      const submitTimeout = setTimeout(() => submitController.abort(), 15000);
       const submitResponse = await fetch(submitEndpoint, {
         method: "POST",
         headers: {
@@ -586,7 +592,9 @@ async function lookupVirusTotal(btn) {
           "Content-Type": submitContentType,
         },
         body: submitBody,
+        signal: submitController.signal,
       });
+      clearTimeout(submitTimeout);
       console.log("[VT] Submit response status:", submitResponse.status);
       if (submitResponse.ok) {
         resultContent.innerHTML =
@@ -687,10 +695,11 @@ async function lookupVirusTotal(btn) {
       </div>
     `;
   } catch (error) {
-    // Always provide web fallback for any error (CORS, network, rate limit, etc.)
     let webUrl = "";
     let specificHint = "";
-    if (error.message?.includes("Failed to fetch") || error.message?.includes("NetworkError")) {
+    if (error.name === "AbortError") {
+      specificHint = "Request timed out. Try again or check your network.";
+    } else if (error.message?.includes("Failed to fetch") || error.message?.includes("NetworkError")) {
       if (isLocalhost) {
         specificHint = "Is the server running? Start it with: node server.js";
       } else {
@@ -765,6 +774,8 @@ async function lookupAbuseIPDB(btn) {
   btn.disabled = true;
 
   try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
     const response = await fetch(
       getAbuseIPDBEndpoint(`/check?ipAddress=${encodeURIComponent(ip)}&maxAgeInDays=90`),
       {
@@ -773,8 +784,10 @@ async function lookupAbuseIPDB(btn) {
           Key: apiKeys.abuseipdb,
           Accept: "application/json",
         },
+        signal: controller.signal,
       },
     );
+    clearTimeout(timeoutId);
 
     if (!response.ok) {
       const err = await response.json().catch(() => ({}));
@@ -819,7 +832,9 @@ async function lookupAbuseIPDB(btn) {
   } catch (error) {
     const webUrl = `https://www.abuseipdb.com/check/${encodeURIComponent(ip)}`;
     let specificHint = "";
-    if (error.message?.includes("Failed to fetch") || error.message?.includes("NetworkError")) {
+    if (error.name === "AbortError") {
+      specificHint = "Request timed out. Try again or check your network.";
+    } else if (error.message?.includes("Failed to fetch") || error.message?.includes("NetworkError")) {
       if (isLocalhost) {
         specificHint = "Is the server running? Start it with: node server.js";
       } else {
@@ -856,24 +871,28 @@ function esc(s) {
 async function rescanVT(analyzePath, btn) {
   if (!apiKeys.virustotal) return;
   btn.disabled = true;
+  const originalHtml = btn.innerHTML;
   btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg> Rescanning...';
 
   try {
     const url = getVTAnalyzeEndpoint(analyzePath);
     console.log("[VT] Rescan ->", url);
 
-    // Use form-encoded body for URL submissions (VT requirement)
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
+
     const response = await fetch(url, {
       method: "POST",
       headers: {
         "x-apikey": apiKeys.virustotal,
         Accept: "application/json",
       },
+      signal: controller.signal,
     });
+    clearTimeout(timeoutId);
 
     console.log("[VT] Rescan status:", response.status);
 
-    // 204 = analysis queued successfully
     if (response.status === 204 || response.ok) {
       btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg> Queued';
       btn.classList.add("rescan-queued");
@@ -887,18 +906,16 @@ async function rescanVT(analyzePath, btn) {
       return;
     }
 
-    // 404 or other errors — try alternate submit approach for URLs
     const errData = await response.json().catch(() => null);
     console.error("[VT] Rescan response:", response.status, errData);
 
-    // For URLs, try the submit endpoint instead
     if (analyzePath.includes("/urls/")) {
       const urlId = analyzePath.match(/\/urls\/([^/]+)/)?.[1];
       if (urlId) {
-        // Try POST /api/v3/urls to resubmit
-        const submitUrl = getVTAnalyzeEndpoint("/api/v3/urls");
         const decoded = atob(urlId);
-        const submitResp = await fetch(submitUrl, {
+        const submitController = new AbortController();
+        const submitTimeout = setTimeout(() => submitController.abort(), 15000);
+        const submitResp = await fetch(getVTSubmitEndpoint(), {
           method: "POST",
           headers: {
             "x-apikey": apiKeys.virustotal,
@@ -906,7 +923,9 @@ async function rescanVT(analyzePath, btn) {
             Accept: "application/json",
           },
           body: `url=${encodeURIComponent(decoded)}`,
+          signal: submitController.signal,
         });
+        clearTimeout(submitTimeout);
         if (submitResp.ok || submitResp.status === 204) {
           btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg> Queued';
           btn.classList.add("rescan-queued");
@@ -926,11 +945,19 @@ async function rescanVT(analyzePath, btn) {
     btn.innerHTML = 'Failed';
     btn.classList.add("rescan-failed");
     btn.title = errMsg;
+    setTimeout(() => { btn.innerHTML = originalHtml; btn.classList.remove("rescan-failed"); }, 3000);
   } catch (error) {
     console.error("[VT] Rescan error:", error);
+    let hint = "";
+    if (error.name === "AbortError") {
+      hint = "Request timed out. ";
+    } else if (error.message?.includes("Failed to fetch") && isLocalhost) {
+      hint = "Is the server running? ";
+    }
     btn.innerHTML = 'Failed';
     btn.classList.add("rescan-failed");
     btn.title = error.message;
+    setTimeout(() => { btn.innerHTML = originalHtml; btn.classList.remove("rescan-failed"); }, 3000);
   } finally {
     btn.disabled = false;
   }
