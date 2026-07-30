@@ -352,8 +352,13 @@ function deduplicateAndFlag(iocs) {
     return true;
   });
 
-  // Deduplicate IPs - already deduplicated during extraction, just add risk flags
-  iocs.ips = iocs.ips.map((ip) => {
+  // Deduplicate IPs - body IPs may overlap with header IPs
+  const seenIps = new Set();
+  iocs.ips = iocs.ips.filter((ip) => {
+    if (seenIps.has(ip.value)) return false;
+    seenIps.add(ip.value);
+    return true;
+  }).map((ip) => {
     ip.riskFlags = [];
     ip.risks = [];
 

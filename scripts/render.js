@@ -234,7 +234,7 @@ function renderUrlList(urls) {
       const hr = u.riskFlags?.some((f) => f.type === "high");
       const mr = u.riskFlags?.some((f) => f.type === "medium");
       const rc = hr ? "malicious" : mr ? "suspicious" : "verified";
-      return `<div class="url-item ${rc}" title="${esc(u.url)}">${esc(trunc(u.url, 40))}</div>`;
+      return `<div class="url-item ${rc}" title="${esc(u.value)}">${esc(trunc(u.value, 40))}</div>`;
     })
     .join("");
 }
@@ -458,7 +458,7 @@ function renderMismatchedLinks(links) {
   const rows = links
     .map(
       (link) =>
-        `<tr><td class="mono">${esc(link.displayText || "N/A")}</td><td class="mono">${esc(link.actualHref || "N/A")}</td><td><span class="risk-tag high">MISMATCH</span></td></tr>`,
+        `<tr><td class="mono">${esc(link.text || "N/A")}</td><td class="mono">${esc(link.href || "N/A")}</td><td><span class="risk-tag high">MISMATCH</span></td></tr>`,
     )
     .join("");
   return `<div class="ioc-section"><h3>Mismatched Links (${links.length})</h3><table class="ioc-table"><thead><tr><th>Display Text</th><th>Actual URL</th><th>Risk</th></tr></thead><tbody>${rows}</tbody></table></div>`;
@@ -528,6 +528,8 @@ export function renderHeaders(container, headers) {
     container.innerHTML = "<p>No header data</p>";
     return;
   }
+  // Use headers.all for raw header display, fall back to headers itself
+  const rawHeaders = headers.all || headers;
   const rows = [];
   const headerOrder = [
     "from",
@@ -542,10 +544,11 @@ export function renderHeaders(container, headers) {
     "dkim-signature",
     "content-type",
     "x-mailer",
+    "x-originating-ip",
   ];
   headerOrder.forEach((key) => {
-    if (headers[key] !== undefined) {
-      const value = headers[key];
+    if (rawHeaders[key] !== undefined) {
+      const value = rawHeaders[key];
       if (Array.isArray(value)) {
         value.forEach((v) =>
           rows.push({ key: formatHeaderName(key), value: v }),
@@ -555,7 +558,7 @@ export function renderHeaders(container, headers) {
       }
     }
   });
-  Object.entries(headers).forEach(([key, value]) => {
+  Object.entries(rawHeaders).forEach(([key, value]) => {
     if (!headerOrder.includes(key)) {
       if (Array.isArray(value)) {
         value.forEach((v) =>

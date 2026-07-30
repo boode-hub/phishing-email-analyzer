@@ -73,10 +73,12 @@ function findHeaderBodyBoundary(input) {
       prevLine.includes(":") &&
       !prevLine.startsWith(" ")
     ) {
-      // Calculate the offset
+      // Calculate the offset accounting for \r\n vs \n
       let offset = 0;
+      const isCRLF = input.includes("\r\n");
+      const lineEnding = isCRLF ? "\r\n" : "\n";
       for (let j = 0; j < i; j++) {
-        offset += lines[j].length + 1; // +1 for newline
+        offset += lines[j].length + lineEnding.length;
       }
       return offset;
     }

@@ -204,14 +204,15 @@ function stripHtml(html) {
     .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
     .replace(/<[^>]+>/g, " ")
     .replace(/&nbsp;/gi, " ")
-    .replace(/&/gi, "&")
-    .replace(/</gi, "<")
-    .replace(/>/gi, ">")
-    .replace(/"/gi, '"')
     .replace(/&#(\d+);/g, (m, num) => String.fromCharCode(num))
     .replace(/&#x([0-9a-f]+);/gi, (m, hex) =>
       String.fromCharCode(parseInt(hex, 16)),
     )
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
     .replace(/\s+/g, " ")
     .trim();
 }
