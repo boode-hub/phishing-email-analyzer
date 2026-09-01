@@ -1,5 +1,18 @@
 // Scoring Module
 // Composite risk score calculation
+//
+// Two rules this module now holds to:
+//
+// 1. Each sub-score is capped BEFORE it is weighted. Previously the weighted
+//    total used the uncapped IOC score, so twenty newsletter shortener links
+//    (20 x 8 = 160, weighted to 48) pushed a message with SPF, DKIM and DMARC
+//    all passing into "Suspicious". Volume of low-severity indicators must not
+//    substitute for severity.
+// 2. Every point added emits a reason. If the tool cannot say why a message
+//    scored what it scored, the score is not usable by an analyst.
+
+const TIER_HIGH = 60;
+const TIER_SUSPICIOUS = 30;
 
 /**
  * Calculate overall risk score
@@ -9,243 +22,269 @@
  * @returns {Object} Risk score and breakdown
  */
 export function calculateScore(auth, iocs, languageAnalysis) {
-  const result = {
-    tier: "Low Risk",
-    score: 0,
-    reasons: [],
+  const authResult = scoreAuthentication(auth);
+  const iocResult = scoreIOCs(iocs);
+  const langResult = scoreLanguage(languageAnalysis);
+
+  // Cap first, then weight. The displayed bars and the total agree.
+  const authScore = clamp(authResult.score);
+  const iocScore = clamp(iocResult.score);
+  const langScore = clamp(langResult.score);
+
+  // Authentication is weighted so that a total authentication failure — SPF,
+  // DKIM and DMARC all failing on a misaligned domain — reaches "High Risk" on
+  // its own, without needing a suspicious link to tip it over. Language is the
+  // weakest signal and cannot reach any tier by itself.
+  const total = Math.round(
+    Math.min(authScore * 0.6 + iocScore * 0.25 + langScore * 0.15, 100),
+  );
+
+  const reasons = [
+    ...authResult.reasons,
+    ...iocResult.reasons,
+    ...langResult.reasons,
+  ];
+
+  return {
+    tier:
+      total >= TIER_HIGH
+        ? "High Risk"
+        : total >= TIER_SUSPICIOUS
+          ? "Suspicious"
+          : "Low Risk",
+    score: total,
+    reasons: [...new Set(reasons)],
     breakdown: {
-      authentication: 0,
-      iocs: 0,
-      language: 0,
+      // "auth" is the key the renderer reads. "authentication" is kept as an
+      // alias so nothing that reached for the old name silently reads 0.
+      auth: authScore,
+      authentication: authScore,
+      iocs: iocScore,
+      language: langScore,
     },
   };
+}
 
-  // Authentication scoring (heavily weighted)
-  const authScore = scoreAuthentication(auth);
-  result.breakdown.authentication = Math.min(authScore, 100);
-
-  if (authScore >= 20) {
-    result.reasons.push(...auth.overallStatus.issues);
-  }
-
-  // IOC scoring
-  const iocScore = scoreIOCs(iocs);
-  result.breakdown.iocs = Math.min(iocScore, 100);
-
-  // Language scoring
-  const langScore = languageAnalysis ? scoreLanguage(languageAnalysis) : 0;
-  result.breakdown.language = Math.min(langScore, 100);
-
-  // Calculate total score (weighted average)
-  const totalScore = authScore * 0.5 + iocScore * 0.3 + langScore * 0.2;
-  result.score = Math.round(Math.min(totalScore, 100));
-
-  // Determine tier
-  if (result.score >= 60) {
-    result.tier = "High Risk";
-  } else if (result.score >= 30) {
-    result.tier = "Suspicious";
-  } else {
-    result.tier = "Low Risk";
-  }
-
-  // Add language reasons
-  if (languageAnalysis && languageAnalysis.categories) {
-    const cats = languageAnalysis.categories;
-    if (cats.urgency && cats.urgency.matchCount > 0) {
-      result.reasons.push(
-        `${cats.urgency.matchCount} urgency phrase(s) detected`,
-      );
-    }
-    if (cats.authority && cats.authority.matchCount > 0) {
-      result.reasons.push(
-        `${cats.authority.matchCount} authority/fear phrase(s) detected`,
-      );
-    }
-    if (cats.financial && cats.financial.matchCount > 0) {
-      result.reasons.push(
-        `${cats.financial.matchCount} financial/fraud phrase(s) detected`,
-      );
-    }
-    if (cats.credential && cats.credential.matchCount > 0) {
-      result.reasons.push(
-        `${cats.credential.matchCount} credential-harvesting phrase(s) detected`,
-      );
-    }
-  }
-
-  // Add IOC reasons
-  if (iocScore > 0) {
-    if (
-      iocs.urls &&
-      iocs.urls.some(
-        (u) => u.risks && u.risks.some((r) => r.type === "mismatch"),
-      )
-    ) {
-      result.reasons.push("Link text mismatch detected");
-    }
-    if (
-      iocs.urls &&
-      iocs.urls.some((u) => u.risks && u.risks.some((r) => r.type === "ip-url"))
-    ) {
-      result.reasons.push("URL uses raw IP address");
-    }
-    if (
-      iocs.urls &&
-      iocs.urls.some(
-        (u) => u.risks && u.risks.some((r) => r.type === "punycode"),
-      )
-    ) {
-      result.reasons.push("Punycode domain detected");
-    }
-    if (
-      iocs.attachments &&
-      iocs.attachments.some((a) => a.risks && a.risks.length > 0)
-    ) {
-      result.reasons.push("Risky attachment detected");
-    }
-  }
-
-  // Deduplicate reasons
-  result.reasons = [...new Set(result.reasons)];
-
-  // If no reasons but score is elevated, add a generic reason
-  if (result.reasons.length === 0 && result.score > 0) {
-    result.reasons.push("Minor risk indicators present");
-  }
-
-  return result;
+function clamp(n) {
+  return Math.max(0, Math.min(Math.round(n), 100));
 }
 
 /**
- * Score authentication results
+ * Score authentication results.
+ *
+ * Weighting reflects what each signal actually proves. A DMARC failure on an
+ * aligned domain is the strongest single indicator of spoofing available from
+ * headers alone; a missing SPF record is weak, because plenty of small senders
+ * never published one.
  */
 function scoreAuthentication(auth) {
+  const reasons = [];
   let score = 0;
 
-  // SPF
+  if (!auth || !auth.mechanisms) return { score: 0, reasons };
+
+  const add = (points, reason) => {
+    score += points;
+    if (reason) reasons.push(reason);
+  };
+
   switch (auth.mechanisms.spf.status) {
     case "fail":
-      score += 30;
+      add(30, "SPF failed — the sending server is not authorized for this domain");
       break;
     case "softfail":
-      score += 15;
+      add(18, "SPF soft-failed — the sending server is not authorized");
+      break;
+    case "permerror":
+      add(8, "The sending domain's SPF record is malformed");
+      break;
+    case "neutral":
+      add(5, "The sending domain's SPF record makes no assertion");
       break;
     case "none":
-      score += 5;
+      add(5, "The sending domain publishes no SPF record");
       break;
-    case "pass":
-      score -= 5;
+    case "temperror":
+      add(2, "SPF could not be evaluated (temporary DNS error)");
+      break;
+    case "unknown":
+      add(2, "No SPF result was recorded by the receiving server");
       break;
   }
 
-  // DKIM
   switch (auth.mechanisms.dkim.status) {
     case "fail":
-      score += 25;
+      add(25, "DKIM signature failed verification — the message was altered or forged");
+      break;
+    case "permerror":
+      add(8, "DKIM signature is malformed");
+      break;
+    case "unverified":
+      add(4, "The message is signed but the receiving server did not verify it");
       break;
     case "none":
-      score += 5;
+      add(5, "The message carries no DKIM signature");
       break;
-    case "pass":
-      score -= 5;
+    case "unknown":
+      add(2, "No DKIM result was recorded by the receiving server");
       break;
   }
 
-  // DMARC
   switch (auth.mechanisms.dmarc.status) {
     case "fail":
-      score += 35;
+      add(35, "DMARC failed — the message does not authenticate as its From domain");
       break;
     case "none":
-      score += 5;
+      add(5, "The sending domain publishes no DMARC policy");
       break;
-    case "pass":
-      score -= 5;
+    case "unknown":
+      add(2, "No DMARC result was recorded by the receiving server");
       break;
   }
 
-  // Domain alignment
-  if (auth.domainAlignment && auth.domainAlignment.mismatches.length > 0) {
-    score += 40;
+  const align = auth.domainAlignment;
+  if (align) {
+    if (align.dmarcAligned === false) {
+      add(30, null);
+      for (const m of align.mismatches) reasons.push(m);
+    }
+    // Reply-To is not a DMARC input, so it is a hint and priced like one.
+    if (align.replyToMismatch) {
+      add(
+        8,
+        `Reply-To points at a different domain (${align.replyToDomain}) than From`,
+      );
+    }
   }
 
-  return Math.max(0, score);
+  // Forged lower Authentication-Results, duplicate From headers, and similar.
+  for (const w of auth.trust?.warnings || []) {
+    add(12, w);
+  }
+
+  // Full authentication is affirmative evidence, but only when all three
+  // mechanisms actually ran. It can reduce accumulated noise, never go
+  // negative on its own.
+  const allPass =
+    auth.mechanisms.spf.status === "pass" &&
+    auth.mechanisms.dkim.status === "pass" &&
+    auth.mechanisms.dmarc.status === "pass" &&
+    align?.dmarcAligned === true;
+  if (allPass) score -= 10;
+
+  return { score: Math.max(0, score), reasons };
 }
 
 /**
- * Score IOCs
+ * Score IOCs.
+ *
+ * Severity leads and volume follows with diminishing returns: the second
+ * shortener link in a newsletter says almost nothing the first did not.
  */
 function scoreIOCs(iocs) {
-  if (!iocs) return 0;
+  const reasons = [];
   let score = 0;
+  if (!iocs) return { score, reasons };
 
-  // High-risk URLs
-  const highRiskUrls = iocs.urls
-    ? iocs.urls.filter(
-        (u) => u.risks && u.risks.some((r) => r.level === "high"),
-      )
-    : [];
-  score += highRiskUrls.length * 15;
+  const hasRisk = (item, level) =>
+    (item.risks || []).some((r) => r.level === level);
+  const hasType = (item, type) =>
+    (item.risks || []).some((r) => r.type === type);
 
-  // Medium-risk URLs
-  const mediumRiskUrls = iocs.urls
-    ? iocs.urls.filter(
-        (u) =>
-          u.risks &&
-          u.risks.some((r) => r.level === "medium") &&
-          !u.risks.some((r) => r.level === "high"),
-      )
-    : [];
-  score += mediumRiskUrls.length * 8;
+  const urls = iocs.urls || [];
+  const high = urls.filter((u) => hasRisk(u, "high"));
+  const medium = urls.filter(
+    (u) => hasRisk(u, "medium") && !hasRisk(u, "high"),
+  );
 
-  // Risky attachments
-  const riskyAttachments = iocs.attachments
-    ? iocs.attachments.filter(
-        (a) => a.risks && a.risks.some((r) => r.level === "high"),
-      )
-    : [];
-  score += riskyAttachments.length * 20;
+  score += diminishing(high.length, 25, 12);
+  score += diminishing(medium.length, 8, 4);
 
-  // Punycode domains
-  const punycodeDomains = iocs.domains
-    ? iocs.domains.filter(
-        (d) => d.risks && d.risks.some((r) => r.type === "punycode"),
-      )
-    : [];
-  score += punycodeDomains.length * 15;
+  if (urls.some((u) => hasType(u, "mismatch")))
+    reasons.push("A link's display text does not match its actual destination");
+  if (urls.some((u) => hasType(u, "ip-url")))
+    reasons.push("A link points at a raw IP address instead of a domain");
+  if (urls.some((u) => hasType(u, "punycode")))
+    reasons.push("A link uses a punycode domain (possible homograph attack)");
+  if (medium.length)
+    reasons.push(
+      `${medium.length} link${medium.length > 1 ? "s use" : " uses"} a URL shortener, hiding the destination`,
+    );
 
-  return score;
+  const riskyAttachments = (iocs.attachments || []).filter((a) =>
+    hasRisk(a, "high"),
+  );
+  if (riskyAttachments.length) {
+    score += diminishing(riskyAttachments.length, 30, 15);
+    const names = riskyAttachments
+      .map((a) => a.value)
+      .filter(Boolean)
+      .slice(0, 3)
+      .join(", ");
+    reasons.push(
+      names
+        ? `Executable or double-extension attachment: ${names}`
+        : "Executable or double-extension attachment present",
+    );
+  }
+
+  const punycodeDomains = (iocs.domains || []).filter((d) =>
+    hasType(d, "punycode"),
+  );
+  if (punycodeDomains.length) {
+    score += diminishing(punycodeDomains.length, 20, 10);
+    reasons.push("A punycode domain was found in the message");
+  }
+
+  const disposable = (iocs.emails || []).filter((e) => hasType(e, "disposable"));
+  if (disposable.length) {
+    score += 10;
+    reasons.push("A disposable email address appears in the message");
+  }
+
+  return { score, reasons };
 }
 
 /**
- * Score language analysis
+ * First occurrence costs `firstWeight`; each additional one costs `restWeight`
+ * and the tail is compressed, so 50 of something never swamps the total.
+ */
+function diminishing(count, firstWeight, restWeight) {
+  if (count <= 0) return 0;
+  return firstWeight + Math.min(count - 1, 4) * restWeight;
+}
+
+/**
+ * Score language analysis. Language is the weakest signal here — real
+ * companies send genuinely urgent mail — so it is capped low and never on its
+ * own enough to reach "High Risk".
  */
 function scoreLanguage(lang) {
-  if (!lang || !lang.categories) return 0;
+  const reasons = [];
+  if (!lang || !lang.categories) return { score: 0, reasons };
+
+  const weights = {
+    urgency: 0.5,
+    authority: 0.5,
+    financial: 0.8,
+    credential: 0.8,
+  };
+  const labels = {
+    urgency: "urgency phrase",
+    authority: "authority/fear phrase",
+    financial: "financial/fraud phrase",
+    credential: "credential-harvesting phrase",
+  };
+
   let score = 0;
-
-  const cats = lang.categories;
-
-  // Urgency
-  if (cats.urgency) {
-    score += cats.urgency.score * 0.5;
+  for (const [name, cat] of Object.entries(lang.categories)) {
+    if (!cat || !cat.matchCount) continue;
+    score += (cat.score || 0) * (weights[name] ?? 0.5);
+    const label = labels[name] || `${name} phrase`;
+    reasons.push(
+      `${cat.matchCount} ${label}${cat.matchCount > 1 ? "s" : ""} detected`,
+    );
   }
 
-  // Authority/fear
-  if (cats.authority) {
-    score += cats.authority.score * 0.5;
-  }
-
-  // Financial/fraud
-  if (cats.financial) {
-    score += cats.financial.score * 0.8;
-  }
-
-  // Credential harvesting
-  if (cats.credential) {
-    score += cats.credential.score * 0.8;
-  }
-
-  return Math.round(score);
+  return { score: Math.round(score), reasons };
 }

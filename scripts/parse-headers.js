@@ -17,34 +17,53 @@ export function parseHeaders(rawInput) {
   const headers = parseHeaderLines(unfolded);
 
   // Extract specific headers (keys are lowercased with hyphens preserved)
+  //
+  // Headers that legitimately repeat (every relay prepends its own
+  // Authentication-Results / Received-SPF, and a message may carry several
+  // DKIM-Signature headers) are always exposed as arrays, ordered topmost
+  // first. Single-value headers take the topmost occurrence: a second From or
+  // Subject is a forgery attempt, and the topmost is what the MUA displays.
   const result = {
     raw: headerSection,
     all: headers,
-    from: extractAddress(headers.from),
-    replyTo: extractAddress(headers["reply-to"]),
-    returnPath: extractAddress(headers["return-path"]),
-    to: extractAddress(headers.to),
-    subject: decodeEncodedWords(headers.subject || ""),
-    date: headers.date,
-    messageId: headers["message-id"],
-    received: Array.isArray(headers.received)
-      ? headers.received
-      : headers.received
-        ? [headers.received]
-        : [],
-    authenticationResults: headers["authentication-results"],
-    receivedSpf: headers["received-spf"],
-    dkimSignature: headers["dkim-signature"],
-    contentType: headers["content-type"],
-    xMailer: headers["x-mailer"],
-    xOriginatingIp: headers["x-originating-ip"],
+    from: extractAddress(first(headers.from)),
+    replyTo: extractAddress(first(headers["reply-to"])),
+    returnPath: extractAddress(first(headers["return-path"])),
+    to: extractAddress(first(headers.to)),
+    subject: decodeEncodedWords(first(headers.subject) || ""),
+    date: first(headers.date),
+    messageId: first(headers["message-id"]),
+    received: asArray(headers.received),
+    authenticationResults: asArray(headers["authentication-results"]),
+    receivedSpf: asArray(headers["received-spf"]),
+    dkimSignature: asArray(headers["dkim-signature"]),
+    contentType: first(headers["content-type"]),
+    xMailer: first(headers["x-mailer"]),
+    xOriginatingIp: first(headers["x-originating-ip"]),
     xHeaders: extractXHeaders(headers),
+    // Headers a sender should only send once. More than one is itself a signal.
+    duplicated: ["from", "subject", "reply-to", "return-path", "date", "to"]
+      .filter((k) => Array.isArray(headers[k]) && headers[k].length > 1)
+      .map((k) => ({ header: k, count: headers[k].length })),
   };
 
   // Extract domains
   result.domains = extractDomains(result);
 
   return result;
+}
+
+/**
+ * A repeated header arrives from parseHeaderLines as an array; a single one as
+ * a string. These two normalize both shapes so callers never have to check.
+ */
+function asArray(v) {
+  if (v == null) return [];
+  return Array.isArray(v) ? v : [v];
+}
+
+function first(v) {
+  return Array.isArray(v) ? v[0] : v;
 }
 
 /**
@@ -270,11 +289,12 @@ function extractDomains(headerData) {
     }
   }
 
-  // DKIM domain
-  if (headerData.dkimSignature) {
-    const dkimMatch = headerData.dkimSignature.match(/d=([^;\s]+)/);
+  // DKIM domain — a message may carry several signatures, each with its own d=
+  for (const sig of headerData.dkimSignature || []) {
+    const dkimMatch = String(sig).match(/[;\s]d=\s*([^;\s]+)/) ||
+      String(sig).match(/^\s*d=\s*([^;\s]+)/);
     if (dkimMatch) {
-      domains.push({ source: "DKIM", domain: dkimMatch[1] });
+      domains.push({ source: "DKIM", domain: dkimMatch[1].toLowerCase() });
     }
   }
 

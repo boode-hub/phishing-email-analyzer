@@ -15,6 +15,7 @@ import {
   renderBody,
   renderHeaders,
   renderSummary,
+  showAllIOCs,
 } from "./render.js";
 
 // State
@@ -39,48 +40,60 @@ function getCORSProxy() {
 }
 
 // Build API endpoint - uses local proxy when running locally, CORS proxy on GitHub Pages
-function getVTEndpoint(path) {
-  if (isLocalhost) {
-    return "http://localhost:8080/proxy/vt" + path;
-  }
+//
+// Local endpoints are relative on purpose. Hardcoding http://localhost:8080
+// made every lookup cross-origin the moment the app was opened at
+// 127.0.0.1, or on any port other than 8080.
+//
+// Proxied targets are URL-encoded. A CORS proxy takes the target as a query
+// parameter (…?url=), so appending it raw handed the target's own query string
+// to the proxy instead: AbuseIPDB's "&maxAgeInDays=90" was being parsed as a
+// parameter of the proxy and never reached AbuseIPDB.
+const VT_BASE = "https://www.virustotal.com";
+const ABUSE_BASE = "https://api.abuseipdb.com/api/v2";
+
+function viaProxy(targetUrl) {
   const proxy = getCORSProxy();
-  if (proxy) {
-    return proxy + "https://www.virustotal.com" + path;
-  }
-  return "https://www.virustotal.com" + path;
+  return proxy ? proxy + encodeURIComponent(targetUrl) : targetUrl;
+}
+
+function getVTEndpoint(path) {
+  if (isLocalhost) return "/proxy/vt" + path;
+  return viaProxy(VT_BASE + path);
 }
 
 function getVTSubmitEndpoint() {
-  if (isLocalhost) {
-    return "http://localhost:8080/proxy/vt-submit";
-  }
-  const proxy = getCORSProxy();
-  if (proxy) {
-    return proxy + "https://www.virustotal.com/api/v3/urls";
-  }
-  return "https://www.virustotal.com/api/v3/urls";
+  if (isLocalhost) return "/proxy/vt-submit";
+  return viaProxy(VT_BASE + "/api/v3/urls");
 }
 
-function getVTAnalyzeEndpoint(path) {
-  if (isLocalhost) {
-    return "http://localhost:8080/proxy/vt-analyze" + path;
-  }
-  const proxy = getCORSProxy();
-  if (proxy) {
-    return proxy + "https://www.virustotal.com" + path;
-  }
-  return "https://www.virustotal.com" + path;
+function getVTAnalyseEndpoint(path) {
+  if (isLocalhost) return "/proxy/vt-analyse" + path;
+  return viaProxy(VT_BASE + path);
 }
 
 function getAbuseIPDBEndpoint(query) {
-  if (isLocalhost) {
-    return "http://localhost:8080/proxy/abuseipdb" + query;
-  }
-  const proxy = getCORSProxy();
-  if (proxy) {
-    return proxy + "https://api.abuseipdb.com/api/v2" + query;
-  }
-  return "https://api.abuseipdb.com/api/v2" + query;
+  if (isLocalhost) return "/proxy/abuseipdb" + query;
+  return viaProxy(ABUSE_BASE + query);
+}
+
+// VirusTotal accepts the SHA-256 of the URL string as its URL identifier.
+// The previous btoa() approach emitted "+" and "/" (neither valid in a path
+// segment) and threw outright on any non-ASCII URL — exactly the
+// internationalized domains this tool exists to flag.
+function vtUrlId(value) {
+  return sha256(value);
+}
+
+// Lookups are cached for the life of the page. VirusTotal's free tier allows
+// four requests per minute, so re-clicking an IOC used to burn the quota.
+const lookupCache = new Map();
+
+async function cachedLookup(key, fn) {
+  if (lookupCache.has(key)) return lookupCache.get(key);
+  const value = await fn();
+  lookupCache.set(key, value);
+  return value;
 }
 
 // Safely get localStorage value
@@ -521,6 +534,13 @@ async function lookupVirusTotal(btn) {
   if (!resultContent) return;
 
   resultRow.classList.remove("hidden");
+
+  const cacheKey = `vt:${type}:${value}`;
+  if (lookupCache.has(cacheKey)) {
+    resultContent.innerHTML = lookupCache.get(cacheKey);
+    return;
+  }
+
   resultContent.innerHTML =
     '<span class="lookup-loading">Loading VirusTotal...</span>';
   btn.disabled = true;
@@ -555,7 +575,7 @@ async function lookupVirusTotal(btn) {
       endpoint = getVTEndpoint(`/api/v3/domains/${encodeURIComponent(value)}`);
     } else {
       // URL lookup (default)
-      const urlId = btoa(value).replace(/=/g, "");
+      const urlId = await vtUrlId(value);
       endpoint = getVTEndpoint(`/api/v3/urls/${urlId}`);
       submitEndpoint = getVTSubmitEndpoint();
       submitBody = `url=${encodeURIComponent(value)}`;
@@ -635,34 +655,39 @@ async function lookupVirusTotal(btn) {
           ? "lookup-suspicious"
           : "lookup-clean";
 
-    // Build type-specific display
+    // Build type-specific display.
+    // The rescan path is spelled "analyse": VirusTotal v3 uses the British
+    // spelling, so every "/analyze" request returned 404.
     let typeLabel = "VirusTotal";
-    let analyzePath = "";
+    let analysePath = "";
     if (type === "attachment") {
       typeLabel = "VirusTotal (File Hash)";
       const content = attachmentContentMap.get(value);
       if (content) {
         const hash = await sha256(content);
-        analyzePath = `/api/v3/files/${hash}/analyze`;
+        analysePath = `/api/v3/files/${hash}/analyse`;
       }
     } else if (type === "ip") {
       typeLabel = "VirusTotal (IP)";
-      analyzePath = `/api/v3/ip_addresses/${encodeURIComponent(value)}/analyze`;
+      analysePath = `/api/v3/ip_addresses/${encodeURIComponent(value)}/analyse`;
     } else if (type === "domain") {
       typeLabel = "VirusTotal (Domain)";
-      analyzePath = `/api/v3/domains/${encodeURIComponent(value)}/analyze`;
+      analysePath = `/api/v3/domains/${encodeURIComponent(value)}/analyse`;
     } else {
       typeLabel = "VirusTotal (URL)";
-      analyzePath = `/api/v3/urls/${btoa(value).replace(/=/g, "")}/analyze`;
+      analysePath = `/api/v3/urls/${await vtUrlId(value)}/analyse`;
     }
 
-    // Build creation date line
-    let creationDateHtml = "";
-    if (attrs.creation_date) {
-      creationDateHtml = `<div class="lookup-meta">Created: ${new Date(attrs.creation_date * 1000).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" })}</div>`;
-    } else if (type === "domain" && attrs註冊_date) {
-      creationDateHtml = `<div class="lookup-meta">Created: ${new Date(attrs.註冊_date * 1000).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" })}</div>`;
-    }
+    // Build creation date line.
+    // The previous `attrs註冊_date` here was not a property access — CJK
+    // characters are valid JS identifier characters, so it parsed as one
+    // undefined variable and threw a ReferenceError on every domain lookup
+    // that lacked creation_date. The outer catch then reported a successful
+    // HTTP 200 as "API UNAVAILABLE".
+    const created = attrs.creation_date ?? attrs.registration_date;
+    const creationDateHtml = created
+      ? `<div class="lookup-meta">Created: ${new Date(created * 1000).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" })}</div>`
+      : "";
 
     resultContent.innerHTML = `
       <div class="lookup-result vt-result">
@@ -686,7 +711,7 @@ async function lookupVirusTotal(btn) {
         ${attrs.as_owner ? `<div class="lookup-meta">AS Owner: ${esc(attrs.as_owner)}</div>` : ""}
         ${attrs.country ? `<div class="lookup-meta">Country: ${esc(attrs.country)}</div>` : ""}
         ${attrs.meaningful_name ? `<div class="lookup-meta">Name: ${esc(attrs.meaningful_name)}</div>` : ""}
-        ${analyzePath ? `<div class="lookup-actions"><button class="btn-rescan" onclick="rescanVT('${esc(analyzePath)}', this)" title="Force fresh analysis on VirusTotal">
+        ${analysePath ? `<div class="lookup-actions"><button class="btn-rescan" data-url="${esc(value)}" onclick="rescanVT('${esc(analysePath)}', this)" title="Force fresh analysis on VirusTotal">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
           Rescan
         </button>
@@ -694,6 +719,8 @@ async function lookupVirusTotal(btn) {
         </div>` : ""}
       </div>
     `;
+    // Only successful results are cached; errors stay retryable.
+    lookupCache.set(cacheKey, resultContent.innerHTML);
   } catch (error) {
     let webUrl = "";
     let specificHint = "";
@@ -769,6 +796,13 @@ async function lookupAbuseIPDB(btn) {
   if (!resultContent) return;
 
   resultRow.classList.remove("hidden");
+
+  const cacheKey = `abuse:${ip}`;
+  if (lookupCache.has(cacheKey)) {
+    resultContent.innerHTML = lookupCache.get(cacheKey);
+    return;
+  }
+
   resultContent.innerHTML =
     '<span class="lookup-loading">Loading AbuseIPDB...</span>';
   btn.disabled = true;
@@ -829,6 +863,7 @@ async function lookupAbuseIPDB(btn) {
         ${attrs.lastReportedAt ? `<div class="lookup-date">Last reported: ${new Date(attrs.lastReportedAt).toLocaleString()}</div>` : ""}
       </div>
     `;
+    lookupCache.set(cacheKey, resultContent.innerHTML);
   } catch (error) {
     const webUrl = `https://www.abuseipdb.com/check/${encodeURIComponent(ip)}`;
     let specificHint = "";
@@ -868,14 +903,14 @@ function esc(s) {
 }
 
 // ===== VT RESCAN =====
-async function rescanVT(analyzePath, btn) {
+async function rescanVT(analysePath, btn) {
   if (!apiKeys.virustotal) return;
   btn.disabled = true;
   const originalHtml = btn.innerHTML;
   btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg> Rescanning...';
 
   try {
-    const url = getVTAnalyzeEndpoint(analyzePath);
+    const url = getVTAnalyseEndpoint(analysePath);
     console.log("[VT] Rescan ->", url);
 
     const controller = new AbortController();
@@ -909,10 +944,12 @@ async function rescanVT(analyzePath, btn) {
     const errData = await response.json().catch(() => null);
     console.error("[VT] Rescan response:", response.status, errData);
 
-    if (analyzePath.includes("/urls/")) {
-      const urlId = analyzePath.match(/\/urls\/([^/]+)/)?.[1];
-      if (urlId) {
-        const decoded = atob(urlId);
+    // Rescan of a URL VirusTotal has never seen fails; submitting it is the
+    // documented way to get it analysed. The identifier is a SHA-256 now and
+    // cannot be decoded back, so the original URL travels on the button.
+    if (analysePath.includes("/urls/")) {
+      const decoded = btn.dataset.url;
+      if (decoded) {
         const submitController = new AbortController();
         const submitTimeout = setTimeout(() => submitController.abort(), 15000);
         const submitResp = await fetch(getVTSubmitEndpoint(), {
@@ -970,6 +1007,7 @@ window.copyIOC = copyIOC;
 window.toggleDefang = toggleDefang;
 window.promptSettings = promptSettings;
 window.rescanVT = rescanVT;
+window.showAllIOCs = showAllIOCs;
 
 // Prompt user to open settings (for disabled lookup buttons)
 function promptSettings() {

@@ -1,4 +1,7 @@
-import { sha256, md5 } from "./hash-utils.js";
+// Rows rendered per IOC table before the rest are collapsed behind a button.
+// A bulk HTML email routinely carries 100+ links; rendering them all built
+// thousands of table rows and inline SVGs in a single innerHTML assignment.
+const IOC_ROW_LIMIT = 50;
 
 // ===== FOCUSED SUMMARY =====
 export async function renderSummary(container, analysis) {
@@ -24,7 +27,18 @@ export async function renderSummary(container, analysis) {
   const spfStatus = auth?.mechanisms?.spf?.status || "unknown";
   const dkimStatus = auth?.mechanisms?.dkim?.status || "unknown";
   const dmarcStatus = auth?.mechanisms?.dmarc?.status || "unknown";
-  const isAligned = !auth?.domainAlignment?.mismatches?.length;
+  // dmarcAligned is the real verdict: DMARC needs one authenticated mechanism
+  // to align, not every source to match. A differing Reply-To is reported on
+  // its own card and does not make the message "MISMATCHED".
+  const dmarcAligned = auth?.domainAlignment?.dmarcAligned;
+  const alignLabel =
+    dmarcAligned === true
+      ? "ALIGNED"
+      : dmarcAligned === false
+        ? "MISMATCHED"
+        : "NO DATA";
+  const alignClass =
+    dmarcAligned === true ? "pass" : dmarcAligned === false ? "fail" : "none";
 
   // Count IOCs
   const urlCount = iocs?.urls?.length || 0;
@@ -49,7 +63,7 @@ export async function renderSummary(container, analysis) {
       <span class="auth-badge-pill ${spfStatus}">SPF ${esc(spfStatus.toUpperCase())}</span>
       <span class="auth-badge-pill ${dkimStatus}">DKIM ${esc(dkimStatus.toUpperCase())}</span>
       <span class="auth-badge-pill ${dmarcStatus}">DMARC ${esc(dmarcStatus.toUpperCase())}</span>
-      <span class="auth-badge-pill ${isAligned ? 'pass' : 'fail'}">${isAligned ? 'ALIGNED' : 'MISMATCHED'}</span>
+      <span class="auth-badge-pill ${alignClass}">${alignLabel}</span>
     </div>
   </div>`;
 
@@ -64,7 +78,7 @@ export async function renderSummary(container, analysis) {
       ${domainCount ? `<div class="ioc-count-item"><span class="ioc-count-num">${domainCount}</span><span class="ioc-count-label">Domains</span></div>` : ''}
       ${ipCount ? `<div class="ioc-count-item"><span class="ioc-count-num">${ipCount}</span><span class="ioc-count-label">IPs</span></div>` : ''}
       ${emailCount ? `<div class="ioc-count-item"><span class="ioc-count-num">${emailCount}</span><span class="ioc-count-label">Emails</span></div>` : ''}
-      ${attCount ? `<div class="ioc-count-item ${iocs.attachments.some(a => isRiskyExt(a.filename)) ? 'high' : ''}"><span class="ioc-count-num">${attCount}</span><span class="ioc-count-label">Files</span></div>` : ''}
+      ${attCount ? `<div class="ioc-count-item ${iocs.attachments.some(a => isRiskyExt(a.value)) ? 'high' : ''}"><span class="ioc-count-num">${attCount}</span><span class="ioc-count-label">Files</span></div>` : ''}
       ${(!urlCount && !domainCount && !ipCount && !emailCount && !attCount) ? '<div class="ioc-count-item"><span class="ioc-count-num">0</span><span class="ioc-count-label">None</span></div>' : ''}
     </div>
   </div>`;
@@ -133,7 +147,9 @@ function mkCard(title, iconKey, rows, risk) {
   const rh = rows
     .map((r) => {
       if (r.r) return `<div class="summary-row">${r.v}</div>`;
-      return `<div class="summary-row"><span class="label">${r.l}</span><span class="value ${r.m ? "mono" : ""} ${r.c || ""}" title="${r.t || ""}">${esc(r.v)}</span></div>`;
+      // r.t is an untrusted header value (a From address). Unescaped it broke
+      // out of the title attribute on any address containing a double quote.
+      return `<div class="summary-row"><span class="label">${esc(r.l)}</span><span class="value ${r.m ? "mono" : ""} ${r.c || ""}" title="${esc(r.t || "")}">${esc(r.v)}</span></div>`;
     })
     .join("");
 
@@ -180,18 +196,6 @@ function isRiskyExt(f) {
   const l = f.toLowerCase();
   return r.some((e) => l.endsWith(e)) || /\.\w+\.\w{3,4}$/.test(l);
 }
-function getAuthRisk(a) {
-  if (!a) return "neutral";
-  const level = a.overallStatus?.level || a.overall;
-  return level === "fail" ? "high" : level === "pass" ? "low" : "medium";
-}
-function hasLangFlags(a) {
-  return (
-    a &&
-    a.categories &&
-    Object.values(a.categories).some((c) => c.matchCount > 0)
-  );
-}
 function extractDomain(e) {
   if (!e) return "N/A";
   const s = typeof e === "string" ? e : e?.email || e?.raw || "";
@@ -204,79 +208,6 @@ function extractSenderIP(h) {
   const lh = r[r.length - 1];
   const m = lh.match(/\b(?:\d{1,3}\.){3}\d{1,3}\b/);
   return m ? m[0] : "N/A";
-}
-
-function renderAuthBadges(auth) {
-  if (!auth || !auth.mechanisms)
-    return '<span class="auth-badge none">N/A</span>';
-  return Object.entries(auth.mechanisms)
-    .map(([n, r]) => {
-      const s = r.status || "none";
-      const cls =
-        s === "pass"
-          ? "pass"
-          : s === "fail"
-            ? "fail"
-            : s === "softfail"
-              ? "softfail"
-              : "none";
-      return `<span class="auth-badge ${cls}">${esc(n.toUpperCase())} ${esc(s.toUpperCase())}</span>`;
-    })
-    .join("");
-}
-
-function renderUrlList(urls) {
-  if (!urls.length)
-    return '<p style="color:var(--muted);font-size:12px;">No URLs found</p>';
-  return urls
-    .slice(0, 10)
-    .map((u) => {
-      const hr = u.riskFlags?.some((f) => f.type === "high");
-      const mr = u.riskFlags?.some((f) => f.type === "medium");
-      const rc = hr ? "malicious" : mr ? "suspicious" : "verified";
-      return `<div class="url-item ${rc}" title="${esc(u.value)}">${esc(trunc(u.value, 40))}</div>`;
-    })
-    .join("");
-}
-
-async function renderAttList(atts) {
-  if (!atts.length)
-    return '<p style="color:var(--muted);font-size:12px;">No attachments</p>';
-  const items = await Promise.all(
-    atts.map(async (a) => {
-      const risky = isRiskyExt(a.filename);
-      const h = a.content ? await sha256(a.content) : "N/A";
-      const m = a.content ? await md5(a.content) : "N/A";
-      return `<div class="attachment-item ${risky ? "malicious" : ""}"><div class="att-name">${esc(a.filename || "unnamed")}</div><div class="att-hash" title="SHA-256">${esc(h)}</div><div class="att-hash" title="MD5">${esc(m)}</div></div>`;
-    }),
-  );
-  return items.join("");
-}
-
-function buildLangRows(a) {
-  if (!a || !a.categories) return [];
-  const rows = [];
-  Object.entries(a.categories)
-    .filter(([, c]) => c.matchCount > 0)
-    .forEach(([n, c]) => {
-      rows.push({ l: esc(n), v: `${c.matchCount} matches`, c: "suspicious" });
-      (c.matches || []).slice(0, 3).forEach((m) => {
-        rows.push({
-          l: "",
-          v: `"${trunc(m.phrase, 30)}"`,
-          m: 1,
-          c: "suspicious",
-        });
-      });
-    });
-  return rows;
-}
-
-function formatBytes(b) {
-  if (b === 0 || b == null) return "0 B";
-  const sizes = ["B", "KB", "MB", "GB"];
-  const i = Math.floor(Math.log(b) / Math.log(1024));
-  return `${(b / Math.pow(1024, i)).toFixed(1)} ${sizes[i]}`;
 }
 
 function renderLangFlags(a) {
@@ -309,6 +240,25 @@ export function renderVerdict(c, sc, langAnalysis) {
   c.innerHTML = `<div class="verdict-box ${tc}"><div class="verdict-tier">${esc(sc.tier || "Unknown")}</div><div class="verdict-score">Score: ${sc.score || 0}/100</div><div class="verdict-reasons">${(sc.reasons || []).map((r) => `<span class="reason-tag">${esc(r)}</span>`).join("")}</div></div><div class="score-breakdown">${["auth", "iocs", "language"].map((k) => `<div class="score-item"><span class="score-label">${esc(k.toUpperCase())}</span><div class="score-bar"><div class="score-fill" style="width:${sc.breakdown?.[k] || 0}%"></div></div><span class="score-value">${sc.breakdown?.[k] || 0}</span></div>`).join("")}</div>${langFlagsHtml ? `<div class="lang-flags-section"><h4>Language Flags</h4>${langFlagsHtml}</div>` : ""}`;
 }
 
+// Colour per authentication result. "unverified", "neutral", "permerror" and
+// "temperror" are distinct states now, and each needs to read differently from
+// a clean pass and from an outright failure.
+const STATUS_STYLES = {
+  pass: { cls: "pass", color: "#22c55e" },
+  fail: { cls: "fail", color: "#ef4444" },
+  softfail: { cls: "softfail", color: "#f59e0b" },
+  permerror: { cls: "softfail", color: "#f59e0b" },
+  temperror: { cls: "none", color: "#9ca3af" },
+  neutral: { cls: "none", color: "#9ca3af" },
+  unverified: { cls: "softfail", color: "#f59e0b" },
+  none: { cls: "none", color: "#9ca3af" },
+  unknown: { cls: "none", color: "#9ca3af" },
+};
+
+function statusStyle(s) {
+  return STATUS_STYLES[s] || STATUS_STYLES.unknown;
+}
+
 // ===== AUTHENTICATION =====
 export function renderAuth(c, auth) {
   if (!auth) {
@@ -323,73 +273,112 @@ export function renderAuth(c, auth) {
   const mechHtml = Object.entries(mech)
     .map(([n, r]) => {
       const s = r.status || "none";
-      const cls =
-        s === "pass"
-          ? "pass"
-          : s === "fail"
-            ? "fail"
-            : s === "softfail"
-              ? "softfail"
-              : "none";
-      const color =
-        s === "pass"
-          ? "#22c55e"
-          : s === "fail"
-            ? "#ef4444"
-            : s === "softfail"
-              ? "#f59e0b"
-              : "#9ca3af";
-      return `<div class="auth-mech ${cls}" style="border-left:4px solid ${color}"><div class="mech-name">${esc(n.toUpperCase())}</div><div class="mech-status" style="color:${color};font-weight:700">${esc(s.toUpperCase())}</div>${r.details ? `<div class="mech-details mono">${esc(r.details)}</div>` : ""}</div>`;
+      const { cls, color } = statusStyle(s);
+      return `<div class="auth-mech ${cls}" style="border-left:4px solid ${color}"><div class="mech-name">${esc(n.toUpperCase())}</div><div class="mech-status" style="color:${color};font-weight:700">${esc(s.toUpperCase())}</div>${r.details ? `<div class="mech-details">${esc(r.details)}</div>` : ""}${r.source ? `<div class="mech-source">via ${esc(r.source)}</div>` : ""}</div>`;
     })
     .join("");
 
-  // Fix: align.domains is an object, not an array
-  const alignEntries = Object.entries(align.domains || {});
-  const alignRows = alignEntries
-    .map(([source, domain]) => {
-      const matched = align.aligned?.[source] ?? true;
-      return `<tr class="${matched ? "" : "mismatch-row"}"><td>${esc(source)}</td><td class="mono">${esc(domain)}</td><td class="${matched ? "verified" : "malicious"}">${matched ? "✓ ALIGNED" : "✗ MISMATCH"}</td></tr>`;
-    })
-    .join("");
+  // Alignment rows come from the analysed entries, which know whether each
+  // source is a DMARC input and whether it matched strictly or on the
+  // organizational domain. Reply-To is shown but marked as informational,
+  // because it is not part of DMARC and a mismatch there is not a failure.
+  const fromDomain = align.fromDomain;
+  const alignRows = [
+    fromDomain
+      ? `<tr><td>From</td><td class="mono">${esc(fromDomain)}</td><td class="muted">baseline</td></tr>`
+      : "",
+    ...(align.entries || []).map((e) => {
+      const status = !e.dmarcRelevant
+        ? `<span class="muted">${e.aligned ? "same domain" : "differs (not a DMARC input)"}</span>`
+        : e.aligned
+          ? `<span class="verified">✓ ALIGNED (${esc(e.mode)})</span>`
+          : `<span class="malicious">✗ MISMATCH</span>`;
+      const cls = e.dmarcRelevant && !e.aligned ? "mismatch-row" : "";
+      return `<tr class="${cls}"><td>${esc(e.source)}<div class="align-note">${esc(e.note || "")}</div></td><td class="mono">${esc(e.domain)}</td><td>${status}</td></tr>`;
+    }),
+  ].join("");
 
+  const verdict =
+    align.dmarcAligned === true
+      ? '<p class="align-verdict verified">Domain alignment satisfied — at least one authenticated mechanism matches the From domain.</p>'
+      : align.dmarcAligned === false
+        ? '<p class="align-verdict malicious">No authenticated mechanism aligns with the From domain.</p>'
+        : '<p class="align-verdict muted">Not enough information to evaluate alignment.</p>';
+
+  // hop.number is assigned so hop 1 is where the message originated; the array
+  // is in header order, which is the reverse.
   const recvHtml = recv
     .map(
-      (hop, i) =>
-        `<div class="received-hop ${hop.suspicious ? "suspicious-hop" : ""}"><div class="hop-num">${i + 1}</div><div class="hop-details"><div class="hop-from">From: ${esc(hop.from || "N/A")}</div><div class="hop-by">By: ${esc(hop.by || "N/A")}</div><div class="hop-ip">IP: <span class="mono">${esc(hop.ip || "N/A")}</span></div><div class="hop-date">${esc(hop.date || "N/A")}</div>${hop.suspicious ? '<div class="hop-warning">&#9888; Suspicious hop</div>' : ""}</div></div>`,
+      (hop) =>
+        `<div class="received-hop ${hop.suspicious ? "suspicious-hop" : ""}"><div class="hop-num">${hop.number}</div><div class="hop-details"><div class="hop-from">From: ${esc(hop.from || "N/A")}${hop.isOrigin ? ' <span class="hop-tag">origin</span>' : ""}</div><div class="hop-by">By: ${esc(hop.by || "N/A")}</div><div class="hop-ip">IP: <span class="mono">${esc(hop.ip || "N/A")}</span></div><div class="hop-date">${esc(hop.date || "N/A")}</div>${(hop.warnings || []).map((w) => `<div class="hop-warning">&#9888; ${esc(w)}</div>`).join("")}</div></div>`,
     )
     .join("");
 
-  c.innerHTML = `<div class="auth-section"><h3>Mechanism Results</h3><div class="auth-mechanisms">${mechHtml || "<p>No auth data</p>"}</div></div><div class="auth-section"><h3>Domain Alignment</h3><table class="alignment-table"><thead><tr><th>Source</th><th>Domain</th><th>Status</th></tr></thead><tbody>${alignRows || '<tr><td colspan="3">No alignment data</td></tr>'}</tbody></table></div><div class="auth-section"><h3>Received Chain</h3><div class="received-chain">${recvHtml || "<p>No received chain data</p>"}</div></div>`;
+  const trustHtml = (auth.trust?.warnings || []).length
+    ? `<div class="auth-section"><h3>Header Trust</h3><div class="trust-warnings">${auth.trust.warnings
+        .map((w) => `<div class="trust-warning">&#9888; ${esc(w)}</div>`)
+        .join("")}</div></div>`
+    : "";
+
+  const sourceNote = auth.trust?.authservId
+    ? `<p class="auth-source-note">Results reported by <span class="mono">${esc(auth.trust.authservId)}</span>${auth.trust.authResultsCount > 1 ? ` — ${auth.trust.authResultsCount} Authentication-Results headers present, only the topmost is trusted.` : "."}</p>`
+    : "";
+
+  c.innerHTML = `<div class="auth-section"><h3>Mechanism Results</h3>${sourceNote}<div class="auth-mechanisms">${mechHtml || "<p>No auth data</p>"}</div></div>${trustHtml}<div class="auth-section"><h3>Domain Alignment</h3>${verdict}<div class="table-scroll"><table class="alignment-table"><thead><tr><th>Source</th><th>Domain</th><th>Status</th></tr></thead><tbody>${alignRows || '<tr><td colspan="3">No alignment data</td></tr>'}</tbody></table></div></div><div class="auth-section"><h3>Received Chain</h3><div class="received-chain">${recvHtml || "<p>No received chain data</p>"}</div></div>`;
 }
 
 // ===== IOCS =====
+// Section contents are kept so "show all" can re-render one section on demand
+// instead of building every row up front.
+const iocSectionData = new Map();
+
 export function renderIOCs(container, iocs, apiKeys) {
   if (!iocs) {
     container.innerHTML = "<p>No IOCs found</p>";
     return;
   }
+  iocSectionData.clear();
   const sections = [];
-  if (iocs.urls?.length)
-    sections.push(renderIOCSection("URLs", iocs.urls, "url", apiKeys));
-  if (iocs.domains?.length)
-    sections.push(renderIOCSection("Domains", iocs.domains, "domain", apiKeys));
-  if (iocs.ips?.length)
-    sections.push(renderIOCSection("IP Addresses", iocs.ips, "ip", apiKeys));
-  if (iocs.emails?.length)
-    sections.push(
-      renderIOCSection("Email Addresses", iocs.emails, "email", apiKeys),
-    );
-  if (iocs.attachments?.length)
-    sections.push(
-      renderIOCSection("Attachments", iocs.attachments, "attachment", apiKeys),
-    );
+
+  const add = (title, items, type) => {
+    if (!items?.length) return;
+    const id = `ioc-sec-${iocSectionData.size}`;
+    iocSectionData.set(id, { title, items, type, apiKeys });
+    sections.push(renderIOCSection(id, title, items, type, apiKeys, false));
+  };
+
+  add("URLs", iocs.urls, "url");
+  add("Domains", iocs.domains, "domain");
+  add("IP Addresses", iocs.ips, "ip");
+  add("Email Addresses", iocs.emails, "email");
+  add("Attachments", iocs.attachments, "attachment");
+
   if (iocs.mismatchedLinks?.length)
     sections.push(renderMismatchedLinks(iocs.mismatchedLinks));
+
   container.innerHTML = sections.join("") || "<p>No IOCs found</p>";
 }
 
-function renderIOCSection(title, items, type, apiKeys) {
-  const rows = items
+/** Re-render one IOC section with every row shown. Wired to window in main.js. */
+export function showAllIOCs(id) {
+  const data = iocSectionData.get(id);
+  const el = document.getElementById(id);
+  if (!data || !el) return;
+  el.outerHTML = renderIOCSection(
+    id,
+    data.title,
+    data.items,
+    data.type,
+    data.apiKeys,
+    true,
+  );
+}
+
+function renderIOCSection(id, title, items, type, apiKeys, showAll) {
+  const shown = showAll ? items : items.slice(0, IOC_ROW_LIMIT);
+  const hiddenCount = items.length - shown.length;
+
+  const rows = shown
     .map((item) => {
       const value =
         typeof item === "string"
@@ -451,17 +440,27 @@ function renderIOCSection(title, items, type, apiKeys) {
       return `<tr class="ioc-row"><td class="ioc-value-cell"><span class="ioc-original mono">${esc(value)}</span><span class="ioc-defanged mono hidden">${esc(defanged)}</span></td><td class="ioc-risk-cell">${riskHtml}</td><td class="ioc-actions"><button class="btn-sm" onclick="copyIOC(this)" title="Copy">Copy</button><button class="btn-sm" onclick="toggleDefang(this)" title="Defang">Defang</button><div class="ioc-lookup-btns">${vtBtn}${emailDomainBtn}${abuseBtn}</div></td></tr><tr class="lookup-result-row hidden" data-ioc-value="${esc(value)}"><td colspan="3" class="lookup-result-cell"><div class="lookup-result-content"></div></td></tr>`;
     })
     .join("");
-  return `<div class="ioc-section"><h3>${esc(title)} (${items.length})</h3><table class="ioc-table"><thead><tr><th>Value</th><th>Risk</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+
+  const more = hiddenCount
+    ? `<div class="ioc-more"><button class="btn-sm" onclick="showAllIOCs('${id}')">Show all ${items.length}</button><span class="ioc-more-note">${hiddenCount} more not shown</span></div>`
+    : "";
+
+  return `<div class="ioc-section" id="${id}"><h3>${esc(title)} (${items.length})</h3><div class="table-scroll"><table class="ioc-table"><thead><tr><th>Value</th><th>Risk</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div>${more}</div>`;
 }
 
 function renderMismatchedLinks(links) {
-  const rows = links
+  const shown = links.slice(0, IOC_ROW_LIMIT);
+  const rows = shown
     .map(
       (link) =>
         `<tr><td class="mono">${esc(link.text || "N/A")}</td><td class="mono">${esc(link.href || "N/A")}</td><td><span class="risk-tag high">MISMATCH</span></td></tr>`,
     )
     .join("");
-  return `<div class="ioc-section"><h3>Mismatched Links (${links.length})</h3><table class="ioc-table"><thead><tr><th>Display Text</th><th>Actual URL</th><th>Risk</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  const more =
+    links.length > shown.length
+      ? `<div class="ioc-more"><span class="ioc-more-note">${links.length - shown.length} more not shown</span></div>`
+      : "";
+  return `<div class="ioc-section"><h3>Mismatched Links (${links.length})</h3><div class="table-scroll"><table class="ioc-table"><thead><tr><th>Display Text</th><th>Actual URL</th><th>Risk</th></tr></thead><tbody>${rows}</tbody></table></div>${more}</div>`;
 }
 
 function defang(value) {
@@ -486,9 +485,15 @@ export function renderBody(container, body, languageAnalysis) {
       );
     });
   }
-  container.innerHTML = `<div class="body-tabs"><button class="tab-btn active" data-tab="plain">Plain Text</button><button class="tab-btn" data-tab="html">HTML Preview</button></div><div class="tab-content" id="tab-plain"><pre class="body-text">${highlightedText}</pre></div><div class="tab-content hidden" id="tab-html"><iframe class="html-preview" sandbox="allow-same-origin"></iframe></div>${renderLanguageAnalysis(languageAnalysis)}`;
+  container.innerHTML = `<div class="body-tabs"><button class="tab-btn active" data-tab="plain">Plain Text</button><button class="tab-btn" data-tab="html">HTML Preview</button></div><div class="tab-content" id="tab-plain"><pre class="body-text">${highlightedText}</pre></div><div class="tab-content hidden" id="tab-html"><p class="preview-note">Remote images and scripts are blocked. Nothing in this preview contacts the sender.</p><iframe class="html-preview" sandbox referrerpolicy="no-referrer"></iframe></div>${renderLanguageAnalysis(languageAnalysis)}`;
+
+  // The preview must not phone home. `sandbox` with no allow-list drops the
+  // frame into a unique origin with scripts disabled, and the injected CSP
+  // blocks every remote fetch — previously the preview loaded the sender's
+  // tracking pixels the moment the tab was opened, which is exactly what this
+  // tool promises never to do.
   const iframe = container.querySelector(".html-preview");
-  if (iframe && htmlContent) iframe.srcdoc = htmlContent;
+  if (iframe && htmlContent) iframe.srcdoc = withBlockingCSP(htmlContent);
   container.querySelectorAll(".tab-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       container
@@ -503,6 +508,20 @@ export function renderBody(container, body, languageAnalysis) {
       if (tabEl) tabEl.classList.remove("hidden");
     });
   });
+}
+
+/**
+ * Prepend a content-security policy that blocks every outbound request the
+ * email's HTML might make. `default-src 'none'` covers images, fonts, frames,
+ * scripts and fetches; inline styles stay allowed so the layout still reads.
+ */
+function withBlockingCSP(html) {
+  const meta =
+    '<meta http-equiv="Content-Security-Policy" ' +
+    "content=\"default-src 'none'; style-src 'unsafe-inline'; img-src data:;\">";
+  return /<head[^>]*>/i.test(html)
+    ? html.replace(/<head[^>]*>/i, (m) => m + meta)
+    : meta + html;
 }
 
 function renderLanguageAnalysis(analysis) {
@@ -578,7 +597,9 @@ export function renderHeaders(container, headers) {
       return `<tr><td class="header-name">${esc(row.key)}</td><td class="header-value mono">${esc(displayValue)}</td></tr>`;
     })
     .join("");
-  container.innerHTML = `<div class="headers-table-wrapper"><button class="btn-sm" id="copy-headers">Copy All Headers</button><table class="headers-table"><thead><tr><th>Header</th><th>Value</th></tr></thead><tbody>${tableRows}</tbody></table></div>`;
+  // Collapsed by default, as the spec asks: routed mail routinely carries 50+
+  // X-headers, and an expanded dump pushes every other panel off the screen.
+  container.innerHTML = `<details class="headers-details"><summary class="headers-summary">Show all ${rows.length} headers</summary><div class="headers-table-wrapper"><button class="btn-sm" id="copy-headers">Copy All Headers</button><div class="table-scroll headers-scroll"><table class="headers-table"><thead><tr><th>Header</th><th>Value</th></tr></thead><tbody>${tableRows}</tbody></table></div></div></details>`;
   const copyBtn = container.querySelector("#copy-headers");
   if (copyBtn) {
     copyBtn.addEventListener("click", () => {

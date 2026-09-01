@@ -113,9 +113,10 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // ===== PROXY: VirusTotal Analyze (Rescan) =====
-  if (req.url.startsWith("/proxy/vt-analyze/") && req.method === "POST") {
-    const vtPath = req.url.replace("/proxy/vt-analyze", "");
+  // ===== PROXY: VirusTotal Analyse (Rescan) =====
+  // Spelled "analyse": VirusTotal API v3 uses the British spelling.
+  if (req.url.startsWith("/proxy/vt-analyse/") && req.method === "POST") {
+    const vtPath = req.url.replace("/proxy/vt-analyse", "");
     const vtUrl = `https://www.virustotal.com${vtPath}`;
 
     let body = "";
@@ -161,15 +162,35 @@ const server = http.createServer((req, res) => {
   }
 
   // ===== STATIC FILES =====
-  let filePath = "." + req.url;
-  if (filePath === "./") filePath = "./index.html";
+  // Resolve inside the project directory and refuse anything that escapes it.
+  // "." + req.url served any file on disk to "GET /../../etc/passwd", and the
+  // query string was left on the path so "/index.html?v=2" was a 404.
+  const ROOT = __dirname;
+  let requestPath;
+  try {
+    requestPath = decodeURIComponent(req.url.split("?")[0].split("#")[0]);
+  } catch {
+    res.writeHead(400, { "Content-Type": "text/html" });
+    res.end("<h1>400 Bad Request</h1>", "utf-8");
+    return;
+  }
+  const filePath = path.join(
+    ROOT,
+    requestPath === "/" ? "index.html" : requestPath,
+  );
+
+  if (filePath !== ROOT && !filePath.startsWith(ROOT + path.sep)) {
+    res.writeHead(403, { "Content-Type": "text/html" });
+    res.end("<h1>403 Forbidden</h1>", "utf-8");
+    return;
+  }
 
   const extname = String(path.extname(filePath)).toLowerCase();
   const contentType = MIME_TYPES[extname] || "application/octet-stream";
 
   fs.readFile(filePath, (error, content) => {
     if (error) {
-      if (error.code === "ENOENT") {
+      if (error.code === "ENOENT" || error.code === "EISDIR") {
         res.writeHead(404, { "Content-Type": "text/html" });
         res.end("<h1>404 Not Found</h1>", "utf-8");
       } else {
