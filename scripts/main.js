@@ -8,6 +8,7 @@ import { extractIOCs } from "./extract-iocs.js";
 import { analyzeLanguage } from "./analyze-language.js";
 import { calculateScore } from "./score.js";
 import { sha256Bytes, md5Bytes } from "./hash-utils.js";
+import { isValidIP, isRoutableIP } from "./ip-utils.js";
 import {
   renderVerdict,
   renderAuth,
@@ -604,6 +605,11 @@ async function lookupVirusTotal(btn) {
   const { reveal: resultRow, content: resultContent } = target;
   if (resultRow) resultRow.classList.remove("hidden");
 
+  if (type === "ip" && !isValidIP(value)) {
+    resultContent.innerHTML = `<span class="lookup-error">"${esc(value)}" is not a valid IP address, so there is nothing to look up.</span>`;
+    return;
+  }
+
   const key = apiKeys.virustotal.trim();
   if (!/^[a-f0-9]{64}$/i.test(key)) {
     resultContent.innerHTML =
@@ -851,6 +857,18 @@ async function lookupAbuseIPDB(btn) {
   if (!target) return;
   const { reveal: resultRow, content: resultContent } = target;
   if (resultRow) resultRow.classList.remove("hidden");
+
+  // Never spend a request on something that is not an address. The renderer
+  // already withholds the button, but the check belongs here too so no future
+  // caller can reintroduce the problem.
+  if (!isValidIP(ip)) {
+    resultContent.innerHTML = `<span class="lookup-error">"${esc(ip)}" is not a valid IP address, so there is nothing to look up.</span>`;
+    return;
+  }
+  if (!isRoutableIP(ip)) {
+    resultContent.innerHTML = `<span class="lookup-info">${esc(ip)} is a private or reserved address. Reputation services hold no data for it.</span>`;
+    return;
+  }
 
   const key = apiKeys.abuseipdb.trim();
   if (key.length < 20) {

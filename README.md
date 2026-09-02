@@ -146,6 +146,7 @@ Three synthetic `.eml` files are included for testing:
 node tests/runner.mjs            # module unit tests
 node tests/auth.test.mjs         # SPF/DKIM/DMARC parsing + alignment + scoring
 node tests/attachments.test.mjs  # MIME extraction + file hashing
+node tests/ip.test.mjs           # IP validation, extraction, private ranges
 ```
 
 Attachment hashes are asserted against `node:crypto`, not against values this

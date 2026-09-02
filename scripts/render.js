@@ -1,3 +1,5 @@
+import { isValidIP, isPrivateIP, isRoutableIP, findIPs } from "./ip-utils.js";
+
 // Rows rendered per IOC table before the rest are collapsed behind a button.
 // A bulk HTML email routinely carries 100+ links; rendering them all built
 // thousands of table rows and inline SVGs in a single innerHTML assignment.
@@ -123,11 +125,12 @@ export async function renderSummary(container, analysis, apiKeys) {
   // so the LAST one is where the message entered the mail system. The card
   // previously showed it under the misleading label "Last Hop".
   const chain = auth?.receivedChain || [];
-  const origin = chain.find((h) => h.isOrigin && h.ip) || null;
-  const relay = chain.find((h) => h.ip) || null;
-  const originIp = origin?.ip || sip;
+  const origin = chain.find((h) => h.isOrigin && isValidIP(h.ip)) || null;
+  const relay = chain.find((h) => isValidIP(h.ip)) || null;
+  const originIp = origin?.ip || (isValidIP(sip) ? sip : null);
   const relayIp = relay?.ip || null;
   const showRelay = relayIp && relayIp !== originIp;
+  const originLabel = originIp || "Not determinable from these headers";
 
   html += `<div class="summary-ip-card ${isPrivateIP(originIp) ? "risk-border-high" : "risk-border-neutral"}" data-lookup-scope>
     <div class="card-header">
@@ -137,8 +140,8 @@ export async function renderSummary(container, analysis, apiKeys) {
     <div class="ip-primary">
       <div class="ip-label">Originating IP <span class="ip-hint">(where the message entered the mail system)</span></div>
       <div class="ip-value-row">
-        <span class="ip-value mono">${esc(originIp)}</span>
-        ${originIp && originIp !== "N/A" ? ipLookupButtons(originIp, apiKeys) : ""}
+        <span class="ip-value mono ${originIp ? "" : "muted"}">${esc(originLabel)}</span>
+        ${ipLookupButtons(originIp, apiKeys)}
       </div>
       ${origin?.from ? `<div class="ip-host mono">${esc(origin.from)}</div>` : ""}
       ${isPrivateIP(originIp) ? '<div class="ip-warning">&#9888; Private/reserved address</div>' : ""}
@@ -160,8 +163,18 @@ export async function renderSummary(container, analysis, apiKeys) {
   container.innerHTML = html;
 }
 
-/** VirusTotal + AbuseIPDB buttons for a single IP, outside the IOC table. */
+/**
+ * VirusTotal + AbuseIPDB buttons for a single IP, outside the IOC table.
+ *
+ * Nothing is offered for an address the services cannot answer for. Sending a
+ * malformed or private address just produces a vendor error in the panel.
+ */
 function ipLookupButtons(ip, apiKeys) {
+  if (!isValidIP(ip)) return "";
+  if (!isRoutableIP(ip)) {
+    return `<span class="ip-actions"><button class="btn-sm" onclick="copyText('${esc(ip)}', this)" title="Copy">Copy</button><span class="ip-note">private/reserved — not published in reputation data</span></span>`;
+  }
+
   const vt = apiKeys?.virustotal
     ? `<button class="btn-ioc-lookup btn-vt" data-value="${esc(ip)}" data-type="ip" onclick="lookupVirusTotal(this)" title="Check this IP on VirusTotal">VT</button>`
     : `<button class="btn-ioc-lookup btn-vt disabled" onclick="promptSettings()" title="Add a VirusTotal API key in Settings">VT</button>`;
@@ -211,13 +224,6 @@ function trunc(s, m) {
 function isSuspiciousDomain(d) {
   return d && d !== "N/A" && (d.startsWith("xn--") || /^\d/.test(d));
 }
-function isPrivateIP(ip) {
-  return (
-    ip &&
-    ip !== "N/A" &&
-    /^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|127\.|0\.0\.0\.0)/.test(ip)
-  );
-}
 function isRiskyExt(f) {
   if (!f) return false;
   const r = [
@@ -244,9 +250,7 @@ function extractDomain(e) {
 function extractSenderIP(h) {
   const r = h.received;
   if (!r || !r.length) return "N/A";
-  const lh = r[r.length - 1];
-  const m = lh.match(/\b(?:\d{1,3}\.){3}\d{1,3}\b/);
-  return m ? m[0] : "N/A";
+  return findIPs(String(r[r.length - 1]))[0] || "N/A";
 }
 
 function renderLangFlags(a) {
@@ -436,6 +440,11 @@ function renderIOCSection(id, title, items, type, apiKeys, showAll) {
       const hasVtKey = apiKeys?.virustotal;
       const hasAbuseKey = apiKeys?.abuseipdb;
 
+      // A private or reserved address has no reputation data to fetch, so no
+      // lookup button is offered for one. Declared before the buttons that
+      // read it.
+      const lookupUseless = type === "ip" && !isRoutableIP(value);
+
       // Files carry their hash on the button so a VirusTotal lookup needs no
       // re-derivation, and the hash is visible without clicking anything.
       const shaAttr =
@@ -451,7 +460,9 @@ function renderIOCSection(id, title, items, type, apiKeys, showAll) {
             }<div class="att-meta">${esc(item.contentType || "unknown type")} · ${formatSize(item.size)}${item.inline ? " · inline" : ""}</div></div>`
           : "";
 
-      const vtBtn = hasVtKey
+      const vtBtn = lookupUseless
+        ? ""
+        : hasVtKey
         ? `<button class="btn-ioc-lookup btn-vt" data-value="${esc(value)}" data-type="${type}"${shaAttr} onclick="lookupVirusTotal(this)" title="Check VirusTotal">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
             VT
@@ -462,7 +473,7 @@ function renderIOCSection(id, title, items, type, apiKeys, showAll) {
           </button>`;
 
       let abuseBtn = "";
-      if (type === "ip") {
+      if (type === "ip" && !lookupUseless) {
         abuseBtn = hasAbuseKey
           ? `<button class="btn-ioc-lookup btn-abuse" data-value="${esc(value)}" onclick="lookupAbuseIPDB(this)" title="Check AbuseIPDB">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>

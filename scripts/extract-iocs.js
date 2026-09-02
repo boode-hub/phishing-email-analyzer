@@ -2,6 +2,8 @@
 // Extract URLs, domains, IPs, emails, and attachments
 // with risk flagging
 
+import { isValidIP, isValidIPv4, isPrivateIP, findIPs } from "./ip-utils.js";
+
 // Known URL shorteners
 const URL_SHORTENERS = [
   "bit.ly",
@@ -130,35 +132,28 @@ function extractFromHeaders(headers, iocs) {
     ipSourceMap.get(value).add(source);
   }
 
-  // Extract from X-Originating-IP (may contain multiple IPs, may be bracketed)
+  // Extract from X-Originating-IP. findIPs validates each candidate, so a
+  // dotted-quad lookalike never becomes an IOC.
   if (headers.xOriginatingIp) {
-    // Handle both raw IPs and bracketed IPs like [1.2.3.4]
-    const ipPattern = /\[?(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\]?/g;
-    let ipMatch;
-    while ((ipMatch = ipPattern.exec(headers.xOriginatingIp)) !== null) {
-      trackIp(ipMatch[1], "X-Originating-IP");
+    for (const ip of findIPs(headers.xOriginatingIp)) {
+      trackIp(ip, "X-Originating-IP");
     }
   }
 
-  // Extract IPs from Received headers
-  if (headers.received && Array.isArray(headers.received)) {
-    for (const received of headers.received) {
-      // Match IPs in brackets (most common: from [1.2.3.4])
-      const bracketMatch = received.match(
-        /\[(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\]/,
-      );
-      if (bracketMatch) {
-        trackIp(bracketMatch[1], "Received");
-      } else {
-        // Also match IPs not in brackets (e.g., "from mail.example.com 1.2.3.4")
-        const bareMatch = received.match(
-          /\bfrom\s+\S+\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b/,
-        );
-        if (bareMatch) {
-          trackIp(bareMatch[1], "Received");
-        }
-      }
+  // Extract IPs from Received headers. Prefer the bracketed address the
+  // receiving server recorded, then any valid address in the from-clause.
+  for (const received of headers.received || []) {
+    const bracketed = [...String(received).matchAll(/\[([^\]]+)\]/g)]
+      .map((m) => m[1].replace(/^IPv6:/i, "").trim())
+      .find(isValidIP);
+
+    if (bracketed) {
+      trackIp(bracketed, "Received");
+      continue;
     }
+    const fromClause = String(received).match(/\bfrom\b([^;]*)/i)?.[1] || "";
+    const found = findIPs(fromClause)[0];
+    if (found) trackIp(found, "Received");
   }
 
   // Now push unique IPs with combined source info
@@ -223,11 +218,8 @@ function extractFromBody(body, iocs) {
   }
 
   // Extract IPs from body
-  const ipPattern = /\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b/g;
-  while ((match = ipPattern.exec(text)) !== null) {
-    // Filter out likely version numbers, etc.
-    if (!isLikelyIP(match[1])) continue;
-    iocs.ips.push({ value: match[1], source: "Body" });
+  for (const ip of findIPs(text)) {
+    iocs.ips.push({ value: ip, source: "Body" });
   }
 
   // Extract attachments
@@ -248,25 +240,6 @@ function extractFromBody(body, iocs) {
   }
 }
 
-/**
- * Check if string looks like an IP address
- */
-function isLikelyIP(str) {
-  // Filter out common false positives
-  const parts = str.split(".");
-  if (parts.length !== 4) return false;
-
-  // Check if any part is > 255
-  for (const part of parts) {
-    const num = parseInt(part, 10);
-    if (num > 255) return false;
-  }
-
-  // Filter out common version numbers
-  if (str === "1.0.0.0" || str === "0.0.0.0") return false;
-
-  return true;
-}
 
 /**
  * Deduplicate and add risk flags
@@ -305,7 +278,10 @@ function deduplicateAndFlag(iocs) {
       }
 
       // Check for IP address in URL
-      if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(parsed.hostname)) {
+      if (
+        isValidIPv4(parsed.hostname) ||
+        (parsed.hostname.startsWith("[") && isValidIP(parsed.hostname.slice(1, -1)))
+      ) {
         url.riskFlags.push({ type: "high", label: "IP URL" });
         url.risks.push({
           type: "ip-url",
@@ -374,6 +350,13 @@ function deduplicateAndFlag(iocs) {
         level: "medium",
         message: "X-Originating-IP header (may be spoofed)",
       });
+    }
+
+    // Reputation services have nothing to say about a private or reserved
+    // address, so mark it and let the renderer omit the lookup buttons.
+    ip.private = isPrivateIP(ip.value);
+    if (ip.private) {
+      ip.riskFlags.push({ type: "low", label: "Private/Reserved" });
     }
 
     // Add defanged version

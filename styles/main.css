@@ -1957,3 +1957,17 @@ mark.highlight-credential {
   border-left-color: #22c55e;
   background: rgba(34, 197, 94, 0.08);
 }
+
+/* Shown in place of lookup buttons for an address no reputation service can
+   answer for (private, reserved, loopback). */
+.ip-note {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-style: italic;
+  align-self: center;
+}
+.ip-value.muted {
+  font-size: 13px;
+  font-weight: 500;
+  font-style: italic;
+}

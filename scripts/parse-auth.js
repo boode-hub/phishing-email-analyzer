@@ -1,5 +1,7 @@
 // Authentication Parsing Module
 // SPF/DKIM/DMARC parsing and DMARC-style domain alignment
+
+import { isValidIP, isPrivateIP, findIPs } from "./ip-utils.js";
 //
 // Design notes, because the accuracy of this file is the accuracy of the tool:
 //
@@ -646,16 +648,20 @@ function parseReceivedChain(receivedHeaders) {
       warnings: [],
     };
 
-    // Prefer a bracketed IP (the address the receiving server actually saw),
-    // then fall back to a bare address anywhere in the from-clause.
-    const bracket = clean.match(/\[(?:IPv6:)?([0-9a-f.:]+)\]/i);
-    if (bracket && /\d/.test(bracket[1])) {
-      hop.ip = bracket[1];
+    // Prefer a bracketed address (what the receiving server actually saw),
+    // then any valid address in the from-clause, then anywhere in the header.
+    // Each candidate is validated: a Received header is full of dotted-quad
+    // lookalikes — queue ids, versions, timestamps — and the old pattern
+    // accepted anything shaped like four numbers, including "15.21.360.10".
+    const bracketed = [...clean.matchAll(/\[([^\]]+)\]/g)]
+      .map((m) => m[1].replace(/^IPv6:/i, "").trim())
+      .find(isValidIP);
+
+    if (bracketed) {
+      hop.ip = bracketed;
     } else {
-      const bare = clean.match(
-        /\bfrom\b[^;]*?\b((?:\d{1,3}\.){3}\d{1,3})\b/i,
-      );
-      if (bare) hop.ip = bare[1];
+      const fromClause = clean.match(/\bfrom\b([^;]*)/i)?.[1] || "";
+      hop.ip = findIPs(fromClause)[0] || findIPs(clean)[0] || null;
     }
 
     const fromMatch = clean.match(/\bfrom\s+([^\s;()\[\]]+)/i);
@@ -703,12 +709,6 @@ function parseReceivedChain(receivedHeaders) {
   return hops;
 }
 
-function isPrivateIP(ip) {
-  if (!ip) return false;
-  return /^(10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|0\.0\.0\.0)/.test(
-    ip,
-  );
-}
 
 // ===== Overall status =====
 
