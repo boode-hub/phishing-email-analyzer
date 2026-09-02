@@ -237,8 +237,12 @@ function extractFromBody(body, iocs) {
         value: att.filename,
         contentType: att.contentType,
         size: att.size,
-        source: "Attachment",
-        content: att.content,
+        source: att.inline ? "Inline" : "Attachment",
+        inline: att.inline,
+        contentId: att.contentId,
+        // Raw bytes, so the hash is computed over the real file rather than a
+        // lossy string round-trip. Hashes are filled in by main.js.
+        bytes: att.bytes,
       });
     }
   }

@@ -7,7 +7,7 @@ import { parseBody } from "./parse-body.js";
 import { extractIOCs } from "./extract-iocs.js";
 import { analyzeLanguage } from "./analyze-language.js";
 import { calculateScore } from "./score.js";
-import { sha256 } from "./hash-utils.js";
+import { sha256Bytes, md5Bytes } from "./hash-utils.js";
 import {
   renderVerdict,
   renderAuth,
@@ -122,6 +122,8 @@ function queryElements() {
     virustotalKeyInput: "virustotal-key",
     abuseipdbKeyInput: "abuseipdb-key",
     corsProxyUrlInput: "cors-proxy-url",
+    apiAvailability: "api-availability",
+    proxyField: "proxy-field",
   };
   for (const [key, id] of Object.entries(ids)) {
     elements[key] = document.getElementById(id);
@@ -193,7 +195,46 @@ function init() {
     }
   });
 
+  renderApiAvailability();
+
   console.log("[Phishing Analyzer] Initialized successfully");
+}
+
+/**
+ * State plainly whether lookups can work from where this page is served.
+ *
+ * Neither VirusTotal nor AbuseIPDB sends an Access-Control-Allow-Origin header
+ * (AbuseIPDB rejects the preflight outright with 405), so a browser will block
+ * the response for any page not served by something that can relay the call.
+ * Served by server.js, the same origin relays them and an API key is all that
+ * is needed. Served from GitHub Pages, no amount of client code can help, and
+ * saying so is more useful than a failed request.
+ */
+function renderApiAvailability() {
+  const el = elements.apiAvailability;
+  if (!el) return;
+
+  if (isLocalhost) {
+    el.className = "api-notice ok";
+    el.innerHTML =
+      "<strong>Lookups are ready.</strong> This page is served by " +
+      "<code>server.js</code>, which relays VirusTotal and AbuseIPDB calls for " +
+      "you. Paste your API keys below and the lookup buttons will work — no " +
+      "proxy setup, no other configuration.";
+    if (elements.proxyField) elements.proxyField.classList.add("hidden");
+    return;
+  }
+
+  el.className = "api-notice";
+  el.innerHTML =
+    "<strong>Lookups cannot run from this address.</strong> VirusTotal and " +
+    "AbuseIPDB do not send CORS headers, so your browser blocks their " +
+    "responses on any page they do not serve themselves. An API key alone " +
+    "cannot change that.<br><br>To use lookups, run the app locally — clone " +
+    "the repo, then <code>node server.js</code> and open " +
+    "<code>http://localhost:8080</code>. Your keys work immediately there. " +
+    "Everything else on this page (parsing, scoring, hashing) is unaffected " +
+    "and runs fine right here.";
 }
 
 // Handle Analyze Button
@@ -236,15 +277,22 @@ async function handleAnalyze() {
       ips: iocs?.ips?.length,
     });
 
-    // Store attachment contents for hash lookups
+    // Hash every extracted file — attachments and inline images alike — so the
+    // hashes are on screen without a lookup, and a VirusTotal file check is one
+    // click away. Previously no attachment ever carried its content this far,
+    // so the file-hash lookup always reported "content not available".
     attachmentContentMap.clear();
-    if (iocs.attachments) {
-      for (const att of iocs.attachments) {
-        if (att.content) {
-          attachmentContentMap.set(att.value, att.content);
-        }
+    for (const att of iocs.attachments || []) {
+      if (att.bytes && att.bytes.length) {
+        att.sha256 = await sha256Bytes(att.bytes);
+        att.md5 = md5Bytes(att.bytes);
+        attachmentContentMap.set(att.value, att.bytes);
       }
     }
+    console.log(
+      "[Phishing Analyzer] Files hashed:",
+      (iocs.attachments || []).length,
+    );
 
     // Analyze language (if body available)
     let languageAnalysis = null;
@@ -421,7 +469,7 @@ async function renderResults(analysis) {
   const summarySection = document.getElementById("summary-section");
   const summaryContent = document.getElementById("summary-content");
   if (summarySection) summarySection.classList.remove("hidden");
-  if (summaryContent) await renderSummary(summaryContent, analysis);
+  if (summaryContent) await renderSummary(summaryContent, analysis, apiKeys);
 
   // Show verdict section
   const verdictSection = document.getElementById("verdict-section");
@@ -508,6 +556,42 @@ function toggleDefang(btn) {
   }
 }
 
+/**
+ * Locate the panel a lookup result should render into.
+ *
+ * IOC tables put the result in a hidden row directly after the button's row;
+ * the summary IP card marks itself with data-lookup-scope and holds its own
+ * result box. Supporting both is what lets the same lookup buttons live
+ * outside the IOC table.
+ */
+function findResultTarget(btn) {
+  const row = btn.closest("tr");
+  if (row) {
+    const resultRow = row.nextElementSibling;
+    const content = resultRow?.querySelector(".lookup-result-content");
+    if (content) return { reveal: resultRow, content };
+  }
+  const scope = btn.closest("[data-lookup-scope]");
+  const content = scope?.querySelector(".lookup-result-content");
+  if (content) return { reveal: null, content };
+  return null;
+}
+
+// ===== COPY ARBITRARY TEXT =====
+function copyText(text, btn) {
+  navigator.clipboard
+    .writeText(text)
+    .then(() => {
+      const original = btn.textContent;
+      btn.textContent = "Copied!";
+      setTimeout(() => (btn.textContent = original), 2000);
+    })
+    .catch(() => {
+      btn.textContent = "Failed";
+      setTimeout(() => (btn.textContent = "Copy"), 2000);
+    });
+}
+
 // ===== VIRUSTOTAL LOOKUP =====
 async function lookupVirusTotal(btn) {
   const value = btn.dataset.value;
@@ -515,25 +599,17 @@ async function lookupVirusTotal(btn) {
   if (!value || !apiKeys.virustotal) return;
 
   // Validate key format (VT keys are 64-char hex)
+  const target = findResultTarget(btn);
+  if (!target) return;
+  const { reveal: resultRow, content: resultContent } = target;
+  if (resultRow) resultRow.classList.remove("hidden");
+
   const key = apiKeys.virustotal.trim();
   if (!/^[a-f0-9]{64}$/i.test(key)) {
-    const row = btn.closest("tr");
-    const resultRow = row?.nextElementSibling;
-    const resultContent = resultRow?.querySelector(".lookup-result-content");
-    if (resultContent) {
-      resultRow.classList.remove("hidden");
-      resultContent.innerHTML = '<span class="lookup-error">Invalid VirusTotal API key format. Key should be 64 hex characters. Check Settings.</span>';
-    }
+    resultContent.innerHTML =
+      '<span class="lookup-error">Invalid VirusTotal API key format. Key should be 64 hex characters. Check Settings.</span>';
     return;
   }
-
-  // Find the result row
-  const row = btn.closest("tr");
-  const resultRow = row?.nextElementSibling;
-  const resultContent = resultRow?.querySelector(".lookup-result-content");
-  if (!resultContent) return;
-
-  resultRow.classList.remove("hidden");
 
   const cacheKey = `vt:${type}:${value}`;
   if (lookupCache.has(cacheKey)) {
@@ -552,21 +628,24 @@ async function lookupVirusTotal(btn) {
     let submitContentType = "";
 
     if (type === "attachment") {
-      // File hash lookup - get content from the map using filename as key
-      const content = attachmentContentMap.get(value);
-      if (content) {
-        // Compute SHA-256 hash of the attachment content
+      // File hash lookup. The button carries the hash computed at analysis
+      // time; the byte map is the fallback.
+      let hash = btn.dataset.sha256;
+      if (!hash) {
+        const bytes = attachmentContentMap.get(value);
+        if (bytes) {
+          resultContent.innerHTML =
+            '<span class="lookup-loading">Computing hash...</span>';
+          hash = await sha256Bytes(bytes);
+        }
+      }
+      if (!hash) {
         resultContent.innerHTML =
-          '<span class="lookup-loading">Computing hash...</span>';
-        const hash = await sha256(content);
-        endpoint = getVTEndpoint(`/api/v3/files/${hash}`);
-      } else {
-        // No content available
-        resultContent.innerHTML =
-          '<span class="lookup-error">Cannot compute hash: attachment content not available. The email may not contain the full attachment data.</span>';
+          '<span class="lookup-error">Cannot compute hash: this part carried no decodable content. The pasted source may be truncated.</span>';
         btn.disabled = false;
         return;
       }
+      endpoint = getVTEndpoint(`/api/v3/files/${hash}`);
     } else if (type === "ip") {
       // IP address lookup
       endpoint = getVTEndpoint(`/api/v3/ip_addresses/${encodeURIComponent(value)}`);
@@ -662,11 +741,9 @@ async function lookupVirusTotal(btn) {
     let analysePath = "";
     if (type === "attachment") {
       typeLabel = "VirusTotal (File Hash)";
-      const content = attachmentContentMap.get(value);
-      if (content) {
-        const hash = await sha256(content);
-        analysePath = `/api/v3/files/${hash}/analyse`;
-      }
+      const bytes = attachmentContentMap.get(value);
+      const hash = btn.dataset.sha256 || (bytes ? await sha256Bytes(bytes) : null);
+      if (hash) analysePath = `/api/v3/files/${hash}/analyse`;
     } else if (type === "ip") {
       typeLabel = "VirusTotal (IP)";
       analysePath = `/api/v3/ip_addresses/${encodeURIComponent(value)}/analyse`;
@@ -734,17 +811,10 @@ async function lookupVirusTotal(btn) {
       }
     }
     if (type === "attachment") {
-      const content = attachmentContentMap.get(value);
-      if (content) {
-        try {
-          const hash = await sha256(content);
-          webUrl = `https://www.virustotal.com/gui/file/${hash}`;
-        } catch {
-          webUrl = `https://www.virustotal.com/gui/search/${encodeURIComponent(value)}`;
-        }
-      } else {
-        webUrl = `https://www.virustotal.com/gui/search/${encodeURIComponent(value)}`;
-      }
+      const hash = btn.dataset.sha256;
+      webUrl = hash
+        ? `https://www.virustotal.com/gui/file/${hash}`
+        : `https://www.virustotal.com/gui/search/${encodeURIComponent(value)}`;
     } else if (type === "ip") {
       webUrl = `https://www.virustotal.com/gui/ip-address/${encodeURIComponent(value)}`;
     } else if (type === "domain") {
@@ -777,25 +847,17 @@ async function lookupAbuseIPDB(btn) {
   if (!ip || !apiKeys.abuseipdb) return;
 
   // Validate key format (AbuseIPDB keys are typically 40+ chars)
+  const target = findResultTarget(btn);
+  if (!target) return;
+  const { reveal: resultRow, content: resultContent } = target;
+  if (resultRow) resultRow.classList.remove("hidden");
+
   const key = apiKeys.abuseipdb.trim();
   if (key.length < 20) {
-    const row = btn.closest("tr");
-    const resultRow = row?.nextElementSibling;
-    const resultContent = resultRow?.querySelector(".lookup-result-content");
-    if (resultContent) {
-      resultRow.classList.remove("hidden");
-      resultContent.innerHTML = '<span class="lookup-error">Invalid AbuseIPDB API key format. Check Settings.</span>';
-    }
+    resultContent.innerHTML =
+      '<span class="lookup-error">Invalid AbuseIPDB API key format. Check Settings.</span>';
     return;
   }
-
-  // Find the result row
-  const row = btn.closest("tr");
-  const resultRow = row?.nextElementSibling;
-  const resultContent = resultRow?.querySelector(".lookup-result-content");
-  if (!resultContent) return;
-
-  resultRow.classList.remove("hidden");
 
   const cacheKey = `abuse:${ip}`;
   if (lookupCache.has(cacheKey)) {
@@ -1008,6 +1070,7 @@ window.toggleDefang = toggleDefang;
 window.promptSettings = promptSettings;
 window.rescanVT = rescanVT;
 window.showAllIOCs = showAllIOCs;
+window.copyText = copyText;
 
 // Prompt user to open settings (for disabled lookup buttons)
 function promptSettings() {

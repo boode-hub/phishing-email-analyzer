@@ -4,7 +4,7 @@
 const IOC_ROW_LIMIT = 50;
 
 // ===== FOCUSED SUMMARY =====
-export async function renderSummary(container, analysis) {
+export async function renderSummary(container, analysis, apiKeys) {
   const h = analysis.headers;
   const auth = analysis.auth;
   const iocs = analysis.iocs;
@@ -116,21 +116,60 @@ export async function renderSummary(container, analysis) {
     dm ? "high" : "low",
   );
 
-  html += mkCard(
-    "Sender IP",
-    "globe",
-    [
-      { l: "Last Hop", v: sip, m: 1 },
-      ...(isPrivateIP(sip)
-        ? [{ l: "Warning", v: "Private/residential IP", c: "malicious" }]
-        : []),
-    ],
-    isPrivateIP(sip) ? "high" : "neutral",
-  );
-
   html += '</div>';
 
+  // === SENDER IP ===
+  // The originating IP is the one that matters: Received headers are prepended,
+  // so the LAST one is where the message entered the mail system. The card
+  // previously showed it under the misleading label "Last Hop".
+  const chain = auth?.receivedChain || [];
+  const origin = chain.find((h) => h.isOrigin && h.ip) || null;
+  const relay = chain.find((h) => h.ip) || null;
+  const originIp = origin?.ip || sip;
+  const relayIp = relay?.ip || null;
+  const showRelay = relayIp && relayIp !== originIp;
+
+  html += `<div class="summary-ip-card ${isPrivateIP(originIp) ? "risk-border-high" : "risk-border-neutral"}" data-lookup-scope>
+    <div class="card-header">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">${ICONS.globe}</svg>
+      <h3>Sender IP</h3>
+    </div>
+    <div class="ip-primary">
+      <div class="ip-label">Originating IP <span class="ip-hint">(where the message entered the mail system)</span></div>
+      <div class="ip-value-row">
+        <span class="ip-value mono">${esc(originIp)}</span>
+        ${originIp && originIp !== "N/A" ? ipLookupButtons(originIp, apiKeys) : ""}
+      </div>
+      ${origin?.from ? `<div class="ip-host mono">${esc(origin.from)}</div>` : ""}
+      ${isPrivateIP(originIp) ? '<div class="ip-warning">&#9888; Private/reserved address</div>' : ""}
+    </div>
+    ${
+      showRelay
+        ? `<div class="ip-secondary">
+      <div class="ip-label">Last relay <span class="ip-hint">(the server that delivered to you)</span></div>
+      <div class="ip-value-row">
+        <span class="ip-value mono">${esc(relayIp)}</span>
+        ${ipLookupButtons(relayIp, apiKeys)}
+      </div>
+    </div>`
+        : ""
+    }
+    <div class="lookup-result-content"></div>
+  </div>`;
+
   container.innerHTML = html;
+}
+
+/** VirusTotal + AbuseIPDB buttons for a single IP, outside the IOC table. */
+function ipLookupButtons(ip, apiKeys) {
+  const vt = apiKeys?.virustotal
+    ? `<button class="btn-ioc-lookup btn-vt" data-value="${esc(ip)}" data-type="ip" onclick="lookupVirusTotal(this)" title="Check this IP on VirusTotal">VT</button>`
+    : `<button class="btn-ioc-lookup btn-vt disabled" onclick="promptSettings()" title="Add a VirusTotal API key in Settings">VT</button>`;
+  const abuse = apiKeys?.abuseipdb
+    ? `<button class="btn-ioc-lookup btn-abuse" data-value="${esc(ip)}" onclick="lookupAbuseIPDB(this)" title="Check this IP on AbuseIPDB">AbuseIPDB</button>`
+    : `<button class="btn-ioc-lookup btn-abuse disabled" onclick="promptSettings()" title="Add an AbuseIPDB API key in Settings">AbuseIPDB</button>`;
+  const copy = `<button class="btn-sm" onclick="copyText('${esc(ip)}', this)" title="Copy">Copy</button>`;
+  return `<span class="ip-actions">${copy}${vt}${abuse}</span>`;
 }
 
 const ICONS = {
@@ -397,8 +436,23 @@ function renderIOCSection(id, title, items, type, apiKeys, showAll) {
       const hasVtKey = apiKeys?.virustotal;
       const hasAbuseKey = apiKeys?.abuseipdb;
 
+      // Files carry their hash on the button so a VirusTotal lookup needs no
+      // re-derivation, and the hash is visible without clicking anything.
+      const shaAttr =
+        type === "attachment" && item.sha256
+          ? ` data-sha256="${esc(item.sha256)}"`
+          : "";
+      const hashHtml =
+        type === "attachment"
+          ? `<div class="ioc-hashes">${
+              item.sha256
+                ? `<div class="hash-line"><span class="hash-label">SHA-256</span><span class="mono hash-val">${esc(item.sha256)}</span></div><div class="hash-line"><span class="hash-label">MD5</span><span class="mono hash-val">${esc(item.md5 || "")}</span></div>`
+                : '<div class="hash-line"><span class="hash-label muted">no decodable content</span></div>'
+            }<div class="att-meta">${esc(item.contentType || "unknown type")} · ${formatSize(item.size)}${item.inline ? " · inline" : ""}</div></div>`
+          : "";
+
       const vtBtn = hasVtKey
-        ? `<button class="btn-ioc-lookup btn-vt" data-value="${esc(value)}" data-type="${type}" onclick="lookupVirusTotal(this)" title="Check VirusTotal">
+        ? `<button class="btn-ioc-lookup btn-vt" data-value="${esc(value)}" data-type="${type}"${shaAttr} onclick="lookupVirusTotal(this)" title="Check VirusTotal">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
             VT
           </button>`
@@ -437,7 +491,7 @@ function renderIOCSection(id, title, items, type, apiKeys, showAll) {
         }
       }
 
-      return `<tr class="ioc-row"><td class="ioc-value-cell"><span class="ioc-original mono">${esc(value)}</span><span class="ioc-defanged mono hidden">${esc(defanged)}</span></td><td class="ioc-risk-cell">${riskHtml}</td><td class="ioc-actions"><button class="btn-sm" onclick="copyIOC(this)" title="Copy">Copy</button><button class="btn-sm" onclick="toggleDefang(this)" title="Defang">Defang</button><div class="ioc-lookup-btns">${vtBtn}${emailDomainBtn}${abuseBtn}</div></td></tr><tr class="lookup-result-row hidden" data-ioc-value="${esc(value)}"><td colspan="3" class="lookup-result-cell"><div class="lookup-result-content"></div></td></tr>`;
+      return `<tr class="ioc-row"><td class="ioc-value-cell"><span class="ioc-original mono">${esc(value)}</span><span class="ioc-defanged mono hidden">${esc(defanged)}</span>${hashHtml}</td><td class="ioc-risk-cell">${riskHtml}</td><td class="ioc-actions"><button class="btn-sm" onclick="copyIOC(this)" title="Copy">Copy</button><button class="btn-sm" onclick="toggleDefang(this)" title="Defang">Defang</button><div class="ioc-lookup-btns">${vtBtn}${emailDomainBtn}${abuseBtn}</div></td></tr><tr class="lookup-result-row hidden" data-ioc-value="${esc(value)}"><td colspan="3" class="lookup-result-cell"><div class="lookup-result-content"></div></td></tr>`;
     })
     .join("");
 
@@ -465,6 +519,16 @@ function renderMismatchedLinks(links) {
 
 function defang(value) {
   return value.replace(/http/gi, "hxxp").replace(/\./g, "[.]");
+}
+
+function formatSize(bytes) {
+  if (!bytes) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  const i = Math.min(
+    Math.floor(Math.log(bytes) / Math.log(1024)),
+    units.length - 1,
+  );
+  return `${(bytes / Math.pow(1024, i)).toFixed(i ? 1 : 0)} ${units[i]}`;
 }
 
 // ===== BODY & LANGUAGE =====

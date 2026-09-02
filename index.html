@@ -133,6 +133,10 @@
               VirusTotal/AbuseIPDB when you click a lookup button.
             </p>
 
+            <!-- Filled in by main.js: states plainly whether lookups can work
+                 from wherever this page is currently being served. -->
+            <div id="api-availability" class="api-notice"></div>
+
             <div class="setting-field">
               <label for="virustotal-key">VirusTotal API Key</label>
               <input
@@ -153,7 +157,7 @@
               <small>Used for IP address reputation lookups</small>
             </div>
 
-            <div class="setting-field">
+            <div class="setting-field" id="proxy-field">
               <label for="cors-proxy-url">CORS Proxy URL (optional)</label>
               <input
                 type="text"

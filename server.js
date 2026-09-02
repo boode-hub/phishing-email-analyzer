@@ -9,7 +9,6 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const https = require("https");
-const url = require("url");
 
 const PORT = 8080;
 
@@ -26,11 +25,13 @@ const MIME_TYPES = {
 
 // Proxy a request to an external API and return the response
 function proxyRequest(targetUrl, options, res) {
-  const parsed = url.parse(targetUrl);
+  // WHATWG URL rather than the deprecated url.parse(), which Node flags as
+  // having security implications.
+  const parsed = new URL(targetUrl);
   const requestOptions = {
     hostname: parsed.hostname,
     port: parsed.port || 443,
-    path: parsed.path,
+    path: parsed.pathname + parsed.search,
     method: options.method || "GET",
     headers: options.headers || {},
   };
@@ -135,7 +136,7 @@ const server = http.createServer((req, res) => {
         headers["Content-Type"] = "application/x-www-form-urlencoded";
       }
 
-      console.log("[Proxy] VT Analyze ->", vtUrl);
+      console.log("[Proxy] VT Analyse ->", vtUrl);
       proxyRequest(vtUrl, { method: "POST", headers, body: body || undefined }, res);
     });
     return;

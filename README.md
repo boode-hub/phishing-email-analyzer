@@ -10,6 +10,8 @@ A fully client-side web application that analyzes suspicious emails for phishing
 - **Header Analysis** — Parses email headers, extracts authentication results (SPF/DKIM/DMARC), and detects domain alignment issues
 - **Body Analysis** — Extracts plain text and HTML content, identifies mismatched links (display text vs actual URL)
 - **IOC Extraction** — Automatically finds URLs, domains, IP addresses, email addresses, and attachments with risk flagging
+- **File Hashing** — Decodes every file part in the message, attachments and inline images alike, and shows SHA-256 and MD5 for each so any of them can be checked against VirusTotal in one click
+- **Sender IP** — States the originating IP (where the message entered the mail system) separately from the last relay, each with VirusTotal and AbuseIPDB lookup buttons
 - **Language Analysis** — Detects urgency, authority/fear, financial fraud, and credential-harvesting language patterns with inline highlighting
 - **Risk Scoring** — Composite score based on authentication failures, IOC risk flags, and language analysis
 - **VirusTotal Integration** — Optional per-IOC lookup for URLs, domains, IPs, and file hashes (requires your own API key)
@@ -62,7 +64,7 @@ node server.js
 │   ├── analyze-language.js # Urgency/fraud keyword scoring
 │   ├── score.js            # Composite verdict scoring
 │   ├── render.js           # DOM rendering for all panels
-│   └── hash-utils.js       # SHA-256 & MD5 for attachment hashing
+│   └── hash-utils.js       # SHA-256 & MD5 (byte-accurate) for file hashing
 ├── sample-data/            # Test .eml files
 │   ├── legitimate-email.eml
 │   ├── phishing-spoofed.eml
@@ -94,18 +96,31 @@ node server.js
 - IP reputation check via `/api/v2/check`
 - Shows abuse confidence score, total reports, country, ISP
 
-### CORS Proxy Setup (Required for GitHub Pages)
+### Where lookups work
 
-When running on GitHub Pages, browsers block direct API calls due to CORS restrictions. You have two options:
+**Run locally and an API key is all you need.**
 
-**Option 1: Run Locally (Recommended)**
 ```bash
 node server.js
-# Open http://localhost:8080
+# Open http://localhost:8080, paste your keys in Settings, done.
 ```
-The local server includes a built-in proxy that handles API calls automatically.
 
-**Option 2: Use a Cloudflare Worker (for GitHub Pages)**
+`server.js` serves the page *and* relays the API calls, so both are same-origin
+and nothing else has to be configured.
+
+**Lookups cannot work from GitHub Pages, and no client-side code can change
+that.** Neither vendor sends CORS headers — AbuseIPDB rejects the preflight with
+`405 Method Not Allowed`, and VirusTotal answers the preflight without an
+`Access-Control-Allow-Origin` header — so the browser discards the response
+before the page ever sees it. An API key does not help; the block is on the
+response, not on authentication. Everything else (parsing, scoring, IOC
+extraction, file hashing) runs fine on Pages. The Settings panel says which
+situation you are in.
+
+If you specifically need lookups from a hosted page, the only route is to put
+something you control in front of the vendors:
+
+**Cloudflare Worker (optional, hosted deployments only)**
 1. Go to [workers.cloudflare.com](https://workers.cloudflare.com/) and create a free account
 2. Create a new Worker and paste the code from [`cors-worker.js`](cors-worker.js)
 3. Save and deploy - copy your worker URL (e.g., `https://your-worker.your-subdomain.workers.dev`)
@@ -123,6 +138,18 @@ Three synthetic `.eml` files are included for testing:
 | `legitimate-email.eml` | Clean email with passing auth                  | Low Risk        |
 | `phishing-spoofed.eml` | Spoofed domain, auth failures, domain mismatch | High Risk       |
 | `phishing-urgency.eml` | Urgency/financial language patterns            | Low-Medium Risk |
+
+
+## Tests
+
+```bash
+node tests/runner.mjs            # module unit tests
+node tests/auth.test.mjs         # SPF/DKIM/DMARC parsing + alignment + scoring
+node tests/attachments.test.mjs  # MIME extraction + file hashing
+```
+
+Attachment hashes are asserted against `node:crypto`, not against values this
+codebase produced, so a self-consistent wrong hash cannot pass.
 
 ## License
 

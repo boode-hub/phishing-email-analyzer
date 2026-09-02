@@ -8,10 +8,34 @@
  */
 export async function sha256(str) {
   const encoder = new TextEncoder();
-  const data = encoder.encode(str);
-  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+  return sha256Bytes(encoder.encode(str));
+}
+
+/**
+ * Compute SHA-256 of raw bytes.
+ *
+ * Attachments must be hashed as bytes, never as a string. Decoding base64 with
+ * atob() yields a binary string whose code units are 0-255; running that back
+ * through TextEncoder UTF-8-encodes every byte above 0x7F into two bytes, so
+ * the digest of any real image or executable came out wrong.
+ *
+ * @param {Uint8Array} bytes
+ * @returns {Promise<string>}
+ */
+export async function sha256Bytes(bytes) {
+  const hashBuffer = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(hashBuffer))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+/**
+ * Compute MD5 of raw bytes.
+ * @param {Uint8Array} bytes
+ * @returns {string}
+ */
+export function md5Bytes(bytes) {
+  return md5Array(bytes);
 }
 
 /**
